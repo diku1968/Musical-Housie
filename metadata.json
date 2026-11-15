@@ -1,0 +1,8 @@
+{
+  "name": "Musical Housie",
+  "description": "Real-time multiplayer music-based Housie game with YouTube and Spotify playlist playback.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

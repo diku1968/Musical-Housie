@@ -1,0 +1,399 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "Public multiplayer Musical Housie room state shared with connected players without exposing unrevealed songs.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "Unique 6-character uppercase alphanumeric room code",
+          "minLength": 6,
+          "maxLength": 6,
+          "pattern": "^[A-Z0-9]{6}$"
+        },
+        "gameName": {
+          "type": "string",
+          "description": "Optional game title chosen by the host",
+          "maxLength": 60
+        },
+        "hostUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the room host",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Display name of the host",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "status": {
+          "type": "string",
+          "enum": ["lobby", "playing", "paused", "ended"],
+          "description": "Lifecycle status of the game room"
+        },
+        "sourceType": {
+          "type": "string",
+          "enum": ["none", "youtube", "spotify"],
+          "description": "Selected playlist provider"
+        },
+        "playlistName": {
+          "type": "string",
+          "description": "Title of the selected playlist",
+          "maxLength": 120
+        },
+        "playlistUrl": {
+          "type": "string",
+          "description": "Original URL of the selected playlist",
+          "maxLength": 300
+        },
+        "totalSongs": {
+          "type": "integer",
+          "description": "Total accessible songs in the selected playlist"
+        },
+        "currentSongNumber": {
+          "type": "integer",
+          "description": "1-based index of the active song, 0 in lobby"
+        },
+        "currentSongRevealed": {
+          "type": "boolean",
+          "description": "Whether the host has revealed the current song title to players"
+        },
+        "currentMedia": {
+          "type": "object",
+          "description": "Current playable media ID without title/artist for player phone audio and auto-tick matching"
+        },
+        "revealedCurrentSong": {
+          "type": "object",
+          "description": "Current song metadata, populated only after host reveal"
+        },
+        "revealedSongs": {
+          "type": "array",
+          "description": "Songs revealed by the host so far"
+        },
+        "enabledPatterns": {
+          "type": "array",
+          "description": "Winning patterns enabled for this game"
+        },
+        "winners": {
+          "type": "array",
+          "description": "Approved winning claims displayed to all players"
+        },
+        "playersSummary": {
+          "type": "array",
+          "description": "Summary list of joined players synced by host"
+        },
+        "randomMode": {
+          "type": "boolean",
+          "description": "Whether songs are selected in randomized order without repetition"
+        },
+        "playerCount": {
+          "type": "integer",
+          "description": "Count of active players in the room"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of room creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last room update"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Automatic room expiration timestamp"
+        }
+      },
+      "required": [
+        "roomCode",
+        "gameName",
+        "hostUid",
+        "hostName",
+        "status",
+        "sourceType",
+        "playlistName",
+        "playlistUrl",
+        "totalSongs",
+        "currentSongNumber",
+        "currentSongRevealed",
+        "currentMedia",
+        "revealedCurrentSong",
+        "revealedSongs",
+        "enabledPatterns",
+        "winners",
+        "playersSummary",
+        "randomMode",
+        "playerCount",
+        "createdAt",
+        "updatedAt",
+        "expiresAt"
+      ]
+    },
+    "HostSecretState": {
+      "title": "HostSecretState",
+      "description": "Private host-only playlist queue and played song IDs kept hidden from players.",
+      "type": "object",
+      "properties": {
+        "hostUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "tracks": {
+          "type": "array",
+          "description": "Accessible tracks loaded from the playlist"
+        },
+        "queueOrder": {
+          "type": "array",
+          "description": "Ordered list of track IDs for the game"
+        },
+        "currentSongId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "playedSongIds": {
+          "type": "array",
+          "description": "List of officially called track IDs"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["hostUid", "tracks", "queueOrder", "currentSongId", "playedSongIds", "updatedAt"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A player participant in a Musical Housie room with their assigned 3x5 ticket and markings.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "roomId": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 6,
+          "pattern": "^[A-Z0-9]{6}$"
+        },
+        "hostUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "isOnline": {
+          "type": "boolean"
+        },
+        "ticket": {
+          "type": "array",
+          "description": "15 unique song items forming the 3x5 Musical Housie ticket"
+        },
+        "ticketNumber": {
+          "type": "integer",
+          "description": "Unique 1-based ticket number assigned to the player when the game starts (0 in lobby)"
+        },
+        "markedSongIds": {
+          "type": "array",
+          "description": "Song IDs marked by the player on their ticket"
+        },
+        "joinedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "roomId", "hostUid", "name", "isOnline", "ticket", "ticketNumber", "markedSongIds", "joinedAt", "lastSeenAt"]
+    },
+    "WinnerClaim": {
+      "title": "WinnerClaim",
+      "description": "A player's win claim submitted for server-side and host verification.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "roomId": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 6,
+          "pattern": "^[A-Z0-9]{6}$"
+        },
+        "hostUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "playerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "ticketNumber": {
+          "type": "integer",
+          "description": "Player's assigned ticket number"
+        },
+        "pattern": {
+          "type": "string",
+          "enum": ["first_five", "top_row", "middle_row", "bottom_row", "full_house"]
+        },
+        "claimedSongIds": {
+          "type": "array"
+        },
+        "ticketSnapshot": {
+          "type": "array"
+        },
+        "claimedAtMs": {
+          "type": "integer",
+          "description": "Client submission timestamp in milliseconds for chronological ordering tie-breaking"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"]
+        },
+        "verifiedMatchedIds": {
+          "type": "array"
+        },
+        "verificationSummary": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "roomId",
+        "hostUid",
+        "playerUid",
+        "playerName",
+        "ticketNumber",
+        "pattern",
+        "claimedSongIds",
+        "ticketSnapshot",
+        "claimedAtMs",
+        "status",
+        "verifiedMatchedIds",
+        "verificationSummary",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Winner": {
+      "title": "Winner",
+      "description": "An approved chronological winner declaration uniquely constrained by roomId + pattern + playerUid.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "roomId": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 6,
+          "pattern": "^[A-Z0-9]{6}$"
+        },
+        "hostUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "claimId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "playerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "ticketNumber": {
+          "type": "integer",
+          "description": "1-based ticket number of the winning ticket"
+        },
+        "pattern": {
+          "type": "string",
+          "enum": ["first_five", "top_row", "middle_row", "bottom_row", "full_house"]
+        },
+        "approvedAtMs": {
+          "type": "integer",
+          "description": "Server-processed chronological winning timestamp in milliseconds"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "roomId",
+        "hostUid",
+        "claimId",
+        "playerUid",
+        "playerName",
+        "ticketNumber",
+        "pattern",
+        "approvedAtMs",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/Room" },
+      "description": "Active Musical Housie game room keyed by 6-character room code."
+    },
+    "/rooms/{roomId}/hostState/{stateId}": {
+      "schema": { "$ref": "#/entities/HostSecretState" },
+      "description": "Host-only private state containing the full playlist queue and played song IDs."
+    },
+    "/rooms/{roomId}/players/{playerUid}": {
+      "schema": { "$ref": "#/entities/Player" },
+      "description": "Connected players and their individual 3x5 tickets and markings."
+    },
+    "/rooms/{roomId}/claims/{claimId}": {
+      "schema": { "$ref": "#/entities/WinnerClaim" },
+      "description": "Submitted winner claims awaiting or resolved by host/server verification."
+    },
+    "/rooms/{roomId}/winners/{winnerId}": {
+      "schema": { "$ref": "#/entities/Winner" },
+      "description": "Immutable approved winners uniquely constrained by roomId + pattern + playerUid."
+    }
+  }
+}

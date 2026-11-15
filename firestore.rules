@@ -1,0 +1,381 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidRoomCode(code) {
+      return code is string && code.size() == 6 && code.matches('^[A-Z0-9]{6}$');
+    }
+
+    function isValidRevealedSongMap(song) {
+      return song is map
+        && song.keys().hasAll(['id', 'title', 'artist', 'sourceId'])
+        && song.keys().hasOnly(['id', 'title', 'artist', 'sourceId'])
+        && song.id is string && song.id.size() <= 128
+        && song.title is string && song.title.size() <= 200
+        && song.artist is string && song.artist.size() <= 150
+        && song.sourceId is string && song.sourceId.size() <= 128;
+    }
+
+    function isValidCurrentMediaMap(media) {
+      return media is map
+        && media.keys().hasAll(['songId', 'sourceType', 'sourceId', 'previewUrl'])
+        && media.keys().hasOnly(['songId', 'sourceType', 'sourceId', 'previewUrl'])
+        && media.songId is string && media.songId.size() <= 128
+        && media.sourceType is string && media.sourceType in ['none', 'youtube', 'spotify']
+        && media.sourceId is string && media.sourceId.size() <= 128
+        && media.previewUrl is string && media.previewUrl.size() <= 300;
+    }
+
+    function isValidRoom(data, roomId) {
+      return data.keys().hasAll([
+          'roomCode', 'gameName', 'hostUid', 'hostName', 'status',
+          'sourceType', 'playlistName', 'playlistUrl', 'totalSongs',
+          'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong',
+          'revealedSongs', 'enabledPatterns', 'winners', 'playersSummary',
+          'randomMode', 'playerCount', 'createdAt', 'updatedAt', 'expiresAt'
+        ])
+        && data.keys().hasOnly([
+          'roomCode', 'gameName', 'hostUid', 'hostName', 'status',
+          'sourceType', 'playlistName', 'playlistUrl', 'totalSongs',
+          'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong',
+          'revealedSongs', 'enabledPatterns', 'winners', 'playersSummary',
+          'randomMode', 'playerCount', 'createdAt', 'updatedAt', 'expiresAt'
+        ])
+        && isValidRoomCode(data.roomCode)
+        && data.roomCode == roomId
+        && data.gameName is string && data.gameName.size() <= 60
+        && data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128
+        && data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 40
+        && data.status is string && data.status in ['lobby', 'playing', 'paused', 'ended']
+        && data.sourceType is string && data.sourceType in ['none', 'youtube', 'spotify']
+        && data.playlistName is string && data.playlistName.size() <= 120
+        && data.playlistUrl is string && data.playlistUrl.size() <= 300
+        && data.totalSongs is int && data.totalSongs >= 0 && data.totalSongs <= 200
+        && data.currentSongNumber is int && data.currentSongNumber >= 0 && data.currentSongNumber <= 200
+        && data.currentSongRevealed is bool
+        && isValidCurrentMediaMap(data.currentMedia)
+        && isValidRevealedSongMap(data.revealedCurrentSong)
+        && data.revealedSongs is list && data.revealedSongs.size() <= 200
+        && (data.revealedSongs.size() == 0 || (data.revealedSongs[0] is map && data.revealedSongs[0].id is string))
+        && data.enabledPatterns is list && data.enabledPatterns.size() >= 1 && data.enabledPatterns.size() <= 5
+        && data.enabledPatterns.hasOnly(['first_five', 'top_row', 'middle_row', 'bottom_row', 'full_house'])
+        && data.winners is list && data.winners.size() <= 10
+        && (data.winners.size() == 0 || (data.winners[0] is map && data.winners[0].claimId is string))
+        && data.playersSummary is list && data.playersSummary.size() <= 100
+        && (data.playersSummary.size() == 0 || (data.playersSummary[0] is map && data.playersSummary[0].uid is string))
+        && data.randomMode is bool
+        && data.playerCount is int && data.playerCount >= 0 && data.playerCount <= 100
+        && data.playerCount == data.playersSummary.size()
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.expiresAt is timestamp;
+    }
+
+    function isValidHostState(data) {
+      return data.keys().hasAll(['hostUid', 'tracks', 'queueOrder', 'currentSongId', 'playedSongIds', 'updatedAt'])
+        && data.keys().hasOnly(['hostUid', 'tracks', 'queueOrder', 'currentSongId', 'playedSongIds', 'updatedAt'])
+        && data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128
+        && data.tracks is list && data.tracks.size() <= 200
+        && (data.tracks.size() == 0 || (data.tracks[0] is map && data.tracks[0].id is string))
+        && data.queueOrder is list && data.queueOrder.size() <= 200
+        && (data.queueOrder.size() == 0 || data.queueOrder[0] is string)
+        && data.currentSongId is string && data.currentSongId.size() <= 128
+        && data.playedSongIds is list && data.playedSongIds.size() <= 200
+        && (data.playedSongIds.size() == 0 || data.playedSongIds[0] is string)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlayer(data, roomId, playerUid) {
+      return data.keys().hasAll(['uid', 'roomId', 'hostUid', 'name', 'isOnline', 'ticket', 'ticketNumber', 'markedSongIds', 'joinedAt', 'lastSeenAt'])
+        && data.keys().hasOnly(['uid', 'roomId', 'hostUid', 'name', 'isOnline', 'ticket', 'ticketNumber', 'markedSongIds', 'joinedAt', 'lastSeenAt'])
+        && data.uid is string && data.uid == playerUid
+        && isValidRoomCode(data.roomId) && data.roomId == roomId
+        && data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 40
+        && data.isOnline is bool
+        && data.ticket is list && (data.ticket.size() == 0 || data.ticket.size() == 15)
+        && (data.ticket.size() == 0 || (data.ticket[0] is map && data.ticket[0].id is string))
+        && data.ticketNumber is int && data.ticketNumber >= 0 && data.ticketNumber <= 100
+        && data.markedSongIds is list && data.markedSongIds.size() <= 15
+        && (data.markedSongIds.size() == 0 || (data.markedSongIds[0] is string))
+        && data.joinedAt is timestamp
+        && data.lastSeenAt is timestamp;
+    }
+
+    function isValidClaim(data, roomId, claimId) {
+      return data.keys().hasAll([
+          'id', 'roomId', 'hostUid', 'playerUid', 'playerName', 'ticketNumber', 'pattern',
+          'claimedSongIds', 'ticketSnapshot', 'claimedAtMs', 'status', 'verifiedMatchedIds',
+          'verificationSummary', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'roomId', 'hostUid', 'playerUid', 'playerName', 'ticketNumber', 'pattern',
+          'claimedSongIds', 'ticketSnapshot', 'claimedAtMs', 'status', 'verifiedMatchedIds',
+          'verificationSummary', 'createdAt', 'updatedAt'
+        ])
+        && data.id is string && data.id == claimId
+        && isValidRoomCode(data.roomId) && data.roomId == roomId
+        && data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128
+        && data.playerUid is string && data.playerUid.size() >= 1 && data.playerUid.size() <= 128
+        && data.playerName is string && data.playerName.size() >= 1 && data.playerName.size() <= 40
+        && data.ticketNumber is int && data.ticketNumber >= 0 && data.ticketNumber <= 100
+        && data.pattern is string && data.pattern in ['first_five', 'top_row', 'middle_row', 'bottom_row', 'full_house']
+        && data.claimedSongIds is list && data.claimedSongIds.size() >= 5 && data.claimedSongIds.size() <= 15
+        && data.claimedSongIds[0] is string
+        && data.ticketSnapshot is list && data.ticketSnapshot.size() == 15
+        && data.ticketSnapshot[0] is map && data.ticketSnapshot[0].id is string
+        && data.claimedAtMs is int && data.claimedAtMs > 0
+        && data.status is string && data.status in ['pending', 'approved', 'rejected']
+        && data.verifiedMatchedIds is list && data.verifiedMatchedIds.size() <= 15
+        && (data.verifiedMatchedIds.size() == 0 || data.verifiedMatchedIds[0] is string)
+        && data.verificationSummary is string && data.verificationSummary.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWinner(data, roomId, winnerId) {
+      return data.keys().hasAll([
+          'id', 'roomId', 'hostUid', 'claimId', 'playerUid', 'playerName',
+          'ticketNumber', 'pattern', 'approvedAtMs', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'roomId', 'hostUid', 'claimId', 'playerUid', 'playerName',
+          'ticketNumber', 'pattern', 'approvedAtMs', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == winnerId
+        && isValidRoomCode(data.roomId) && data.roomId == roomId
+        && data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128
+        && isValidId(data.claimId) && data.claimId == data.playerUid + '_' + data.pattern
+        && isValidId(data.playerUid)
+        && data.playerName is string && data.playerName.size() >= 1 && data.playerName.size() <= 40
+        && data.ticketNumber is int && data.ticketNumber >= 1 && data.ticketNumber <= 100
+        && data.pattern is string && data.pattern in ['first_five', 'top_row', 'middle_row', 'bottom_row', 'full_house']
+        && winnerId == data.pattern + '_' + data.playerUid
+        && data.approvedAtMs is int && data.approvedAtMs > 0
+        && data.createdAt is timestamp;
+    }
+
+    match /rooms/{roomId} {
+      allow get: if isSignedIn() && isValidRoomCode(roomId);
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && isValidRoomCode(roomId)
+        && isValidRoom(incoming(), roomId)
+        && incoming().hostUid == request.auth.uid
+        && incoming().status == 'lobby'
+        && incoming().currentSongNumber == 0
+        && incoming().currentSongRevealed == false
+        && incoming().currentMedia.songId == ''
+        && incoming().currentMedia.sourceType == 'none'
+        && incoming().currentMedia.sourceId == ''
+        && incoming().winners.size() == 0
+        && incoming().playersSummary.size() == 0
+        && incoming().playerCount == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().expiresAt > request.time;
+
+      allow update: if isSignedIn()
+        && isValidRoomCode(roomId)
+        && isValidRoom(incoming(), roomId)
+        && existing().status != 'ended'
+        && existing().hostUid == request.auth.uid
+        && incoming().hostUid == existing().hostUid
+        && incoming().roomCode == existing().roomCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().expiresAt == existing().expiresAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().status == 'lobby' && incoming().status == 'lobby' && incoming().diff(existing()).affectedKeys().hasOnly(['sourceType', 'playlistName', 'playlistUrl', 'totalSongs', 'enabledPatterns', 'randomMode', 'updatedAt'])) ||
+          (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['playersSummary', 'playerCount', 'updatedAt'])) ||
+          (existing().status == 'lobby' && existing().totalSongs >= 15 && incoming().status == 'playing' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'randomMode', 'enabledPatterns', 'updatedAt'])) ||
+          (existing().status in ['playing', 'paused'] && incoming().status in ['playing', 'paused'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'randomMode', 'updatedAt'])) ||
+          (existing().status in ['playing', 'paused'] && incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['winners', 'updatedAt'])) ||
+          (incoming().status == 'ended' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'updatedAt']))
+        );
+
+      allow delete: if isSignedIn()
+        && isValidRoomCode(roomId)
+        && existing().hostUid == request.auth.uid;
+
+      match /hostState/{stateId} {
+        allow get: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && stateId == 'secret'
+          && existing().hostUid == request.auth.uid;
+        allow list: if false;
+
+        allow create: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && stateId == 'secret'
+          && isValidHostState(incoming())
+          && incoming().hostUid == request.auth.uid
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/rooms/$(roomId))
+          && getAfter(/databases/$(database)/documents/rooms/$(roomId)).data.hostUid == request.auth.uid;
+
+        allow update: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && stateId == 'secret'
+          && isValidHostState(incoming())
+          && existing().hostUid == request.auth.uid
+          && incoming().hostUid == existing().hostUid
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.status != 'ended';
+
+        allow delete: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && stateId == 'secret'
+          && existing().hostUid == request.auth.uid;
+      }
+
+      match /players/{playerUid} {
+        allow get: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(playerUid)
+          && (request.auth.uid == playerUid || existing().hostUid == request.auth.uid);
+
+        allow list: if isSignedIn()
+          && (existing().hostUid == request.auth.uid || existing().uid == request.auth.uid);
+
+        allow create: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(playerUid)
+          && playerUid == request.auth.uid
+          && isValidPlayer(incoming(), roomId, playerUid)
+          && incoming().uid == request.auth.uid
+          && incoming().ticket.size() == 0
+          && incoming().ticketNumber == 0
+          && incoming().markedSongIds.size() == 0
+          && incoming().joinedAt == request.time
+          && incoming().lastSeenAt == request.time
+          && exists(/databases/$(database)/documents/rooms/$(roomId))
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby'
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.expiresAt > request.time
+          && incoming().hostUid == get(/databases/$(database)/documents/rooms/$(roomId)).data.hostUid;
+
+        allow update: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(playerUid)
+          && isValidPlayer(incoming(), roomId, playerUid)
+          && incoming().uid == existing().uid
+          && incoming().roomId == existing().roomId
+          && incoming().hostUid == existing().hostUid
+          && incoming().joinedAt == existing().joinedAt
+          && incoming().lastSeenAt == request.time
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.status != 'ended'
+          && (
+            (request.auth.uid == playerUid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby' && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'isOnline', 'lastSeenAt'])) ||
+            (request.auth.uid == playerUid && incoming().diff(existing()).affectedKeys().hasOnly(['isOnline', 'lastSeenAt'])) ||
+            (request.auth.uid == playerUid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status in ['playing', 'paused'] && incoming().diff(existing()).affectedKeys().hasOnly(['markedSongIds', 'lastSeenAt'])) ||
+            (existing().hostUid == request.auth.uid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby' && incoming().ticket.size() == 15 && incoming().ticketNumber >= 1 && incoming().diff(existing()).affectedKeys().hasOnly(['ticket', 'ticketNumber', 'markedSongIds', 'lastSeenAt']))
+          );
+
+        allow delete: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(playerUid)
+          && (
+            existing().hostUid == request.auth.uid ||
+            (request.auth.uid == playerUid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby')
+          );
+      }
+
+      match /claims/{claimId} {
+        allow get: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(claimId)
+          && (existing().playerUid == request.auth.uid || existing().hostUid == request.auth.uid);
+
+        allow list: if isSignedIn()
+          && (existing().hostUid == request.auth.uid || existing().playerUid == request.auth.uid);
+
+        allow create: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(claimId)
+          && isValidClaim(incoming(), roomId, claimId)
+          && claimId == request.auth.uid + '_' + incoming().pattern
+          && incoming().playerUid == request.auth.uid
+          && incoming().status == 'pending'
+          && incoming().verifiedMatchedIds.size() == 0
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && !exists(/databases/$(database)/documents/rooms/$(roomId)/winners/$(incoming().pattern + '_' + request.auth.uid))
+          && exists(/databases/$(database)/documents/rooms/$(roomId)/players/$(request.auth.uid))
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.status in ['playing', 'paused']
+          && incoming().pattern in get(/databases/$(database)/documents/rooms/$(roomId)).data.enabledPatterns
+          && incoming().hostUid == get(/databases/$(database)/documents/rooms/$(roomId)).data.hostUid;
+
+        allow update: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(claimId)
+          && isValidClaim(incoming(), roomId, claimId)
+          && incoming().id == existing().id
+          && incoming().roomId == existing().roomId
+          && incoming().hostUid == existing().hostUid
+          && incoming().playerUid == existing().playerUid
+          && incoming().pattern == existing().pattern
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.status != 'ended'
+          && (
+            (existing().hostUid == request.auth.uid && existing().status == 'pending' && incoming().status in ['approved', 'rejected'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'verifiedMatchedIds', 'verificationSummary', 'updatedAt'])) ||
+            (existing().playerUid == request.auth.uid && existing().status == 'rejected' && incoming().status == 'pending' && incoming().verifiedMatchedIds.size() == 0 && !exists(/databases/$(database)/documents/rooms/$(roomId)/winners/$(existing().pattern + '_' + request.auth.uid)) && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'ticketNumber', 'claimedSongIds', 'ticketSnapshot', 'claimedAtMs', 'verifiedMatchedIds', 'verificationSummary', 'updatedAt']))
+          );
+
+        allow delete: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(claimId)
+          && existing().hostUid == request.auth.uid;
+      }
+
+      match /winners/{winnerId} {
+        allow get: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(winnerId);
+
+        allow list: if isSignedIn()
+          && existing().roomId == roomId;
+
+        allow create: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(winnerId)
+          && isValidWinner(incoming(), roomId, winnerId)
+          && incoming().hostUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.hostUid == request.auth.uid
+          && get(/databases/$(database)/documents/rooms/$(roomId)).data.status in ['playing', 'paused']
+          && incoming().pattern in get(/databases/$(database)/documents/rooms/$(roomId)).data.enabledPatterns
+          && exists(/databases/$(database)/documents/rooms/$(roomId)/players/$(incoming().playerUid))
+          && exists(/databases/$(database)/documents/rooms/$(roomId)/claims/$(incoming().claimId));
+
+        allow update: if false;
+
+        allow delete: if isSignedIn()
+          && isValidRoomCode(roomId)
+          && isValidId(winnerId)
+          && existing().hostUid == request.auth.uid;
+      }
+    }
+  }
+}
