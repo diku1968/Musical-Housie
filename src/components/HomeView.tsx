@@ -1,6 +1,9 @@
 import { Disc3, HelpCircle, Play, Users } from 'lucide-react';
 import { useState } from 'react';
+import musicalHousieEmblem from '../assets/images/musical_housie_emblem_1794644150799.jpg';
 import { SavedSession } from '../services/gameService.ts';
+import { AdSenseSlot } from './AdSenseSlot.tsx';
+import { GlobalBranding } from './GlobalBranding.tsx';
 
 interface HomeViewProps {
   savedSession: SavedSession | null;
@@ -56,15 +59,8 @@ export function HomeView({
               </p>
             </div>
 
-            {/* Corner Portrait on Home Page (mobile & desktop top-right corner of hero) */}
-            <div className="shrink-0 flex flex-col items-center gap-1.5 rounded-2xl border border-amber-400/40 bg-[#10162E] p-2 shadow-xl lg:hidden">
-              <img
-                src="/assets/aistudio/Screenshot_2025-10-17_100636_78a1ec3b.png"
-                alt="Dhiren Pathak"
-                className="h-20 w-20 sm:h-24 sm:w-24 rounded-xl object-cover object-top"
-              />
-              <span className="text-[11px] font-bold text-amber-300">Dhiren Pathak</span>
-            </div>
+            {/* Corner Portrait on Home Page (mobile & tablet) */}
+            <GlobalBranding variant="portrait" className="shrink-0 bg-[#10162E] border-amber-400/40 shadow-xl lg:hidden" />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
@@ -125,7 +121,7 @@ export function HomeView({
           <div className="relative w-full max-w-[340px] aspect-square overflow-hidden rounded-3xl border border-white/10 bg-[#10162E] shadow-2xl">
             {!imgError ? (
               <img
-                src="/src/assets/images/musical_housie_emblem_1794644150799.jpg"
+                src={musicalHousieEmblem}
                 alt="Dhiren Pathak Present Musical Housie emblem"
                 referrerPolicy="no-referrer"
                 onError={() => setImgError(true)}
@@ -141,14 +137,7 @@ export function HomeView({
             )}
 
             {/* Top-right corner presenter portrait on desktop */}
-            <div className="hidden lg:flex flex-col items-center gap-1 absolute top-3 right-3 rounded-2xl border border-amber-400/70 bg-[#080B18]/90 backdrop-blur-sm p-1.5 shadow-2xl">
-              <img
-                src="/assets/aistudio/Screenshot_2025-10-17_100636_78a1ec3b.png"
-                alt="Dhiren Pathak"
-                className="h-24 w-24 rounded-xl object-cover object-top"
-              />
-              <span className="text-[11px] font-bold text-amber-300 px-1">Dhiren Pathak</span>
-            </div>
+            <GlobalBranding variant="portrait" className="hidden lg:flex absolute top-3 right-3" />
           </div>
         </div>
       </section>
@@ -176,6 +165,12 @@ export function HomeView({
               Tap Claim Win for First Five, Rows, or Full House. Every claim is verified server-side against officially played songs.
             </p>
           </div>
+        </div>
+      </section>
+
+      <section className="pt-2">
+        <div className="mx-auto w-full max-w-4xl">
+          <AdSenseSlot adSlot="7471293220" />
         </div>
       </section>
     </main>

@@ -37,6 +37,7 @@ import {
   WinnerRecord,
   WinningPattern,
 } from '../shared/types.ts';
+import { GlobalBranding } from './GlobalBranding.tsx';
 import { HousieTicket } from './HousieTicket.tsx';
 import { MusicVisualizer } from './MusicVisualizer.tsx';
 import { WinningPatternsBoard } from './WinningPatternsBoard.tsx';
@@ -46,6 +47,7 @@ interface PlayerGameViewProps {
   roomCode: string;
   playerUid: string;
   onExitRoom: () => void;
+  suppressOfflineBanner?: boolean;
 }
 
 function playMatchChime() {
@@ -74,7 +76,12 @@ function playMatchChime() {
   }
 }
 
-export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameViewProps) {
+export function PlayerGameView({
+  roomCode,
+  playerUid,
+  onExitRoom,
+  suppressOfflineBanner = false,
+}: PlayerGameViewProps) {
   const [room, setRoom] = useState<RoomData | null>(null);
   const [player, setPlayer] = useState<PlayerData | null>(null);
   const [claims, setClaims] = useState<WinnerClaim[]>([]);
@@ -351,7 +358,7 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
 
   return (
     <main className="mx-auto max-w-4xl px-4 sm:px-6 py-6 sm:py-8 pb-24 space-y-6">
-      {isOffline && (
+      {!suppressOfflineBanner && isOffline && (
         <div className="rounded-2xl border border-amber-400/40 bg-amber-500/15 px-4 py-3 text-sm text-amber-200 flex items-center gap-2.5">
           <WifiOff className="h-4 w-4 shrink-0" />
           <span>Internet connection lost. Reconnecting automatically when back online...</span>
@@ -360,7 +367,8 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
 
       {/* Room Status Header */}
       <div className="rounded-3xl border border-white/10 bg-[#121830] p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
+        <div className="space-y-2.5">
+          <GlobalBranding variant="bar" />
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
             <span>Host: {room.hostName}</span>
             <span aria-hidden="true">·</span>

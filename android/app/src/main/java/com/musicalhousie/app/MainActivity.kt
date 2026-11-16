@@ -74,13 +74,20 @@ class MainActivity : AppCompatActivity() {
         handleDeepLinkOrLoadDefault(intent)
     }
 
+    private fun isAppUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        val targetHost = Uri.parse(url).host ?: return false
+        val appHost = Uri.parse(BuildConfig.APP_URL).host ?: return false
+        return targetHost.equals(appHost, ignoreCase = true)
+    }
+
     private fun handleDeepLinkOrLoadDefault(intent: Intent?) {
         val incomingUrl = intent?.dataString
-        val appOrigin = BuildConfig.APP_URL.trimEnd('/')
-        if (!incomingUrl.isNullOrBlank() && incomingUrl.startsWith(appOrigin)) {
-            webView.loadUrl(incomingUrl)
+        val defaultUrl = "${BuildConfig.APP_URL.trimEnd('/')}/"
+        if (isAppUrl(incomingUrl)) {
+            webView.loadUrl(incomingUrl!!)
         } else if (webView.url.isNullOrBlank()) {
-            webView.loadUrl(appOrigin)
+            webView.loadUrl(defaultUrl)
         }
     }
 
@@ -108,10 +115,9 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?
             ): Boolean {
                 val url = request?.url?.toString() ?: return false
-                val appOrigin = BuildConfig.APP_URL.trimEnd('/')
 
-                // Keep internal app navigation & Google/Firebase OAuth inside WebView
-                if (url.startsWith(appOrigin)) {
+                // Keep Musical Housie URLs inside the WebView
+                if (isAppUrl(url)) {
                     return false
                 }
 

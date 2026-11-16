@@ -3,10 +3,9 @@
 This folder is a complete Android Studio Gradle project for **Dhiren Pathak Present Musical Housie** with **Google AdMob** (Banner + Interstitial) pre-wired.
 
 ## 1. Before You Build for Google Play Store
-1. **Publish the Web App** in AI Studio first so your public URL (`https://ais-pre-...`) is live.
+1. `APP_URL` is already set to your published URL (`https://musical-housie.ai.studio/`). Make sure any latest web updates are published to that URL in AI Studio.
 2. Open `android/app/build.gradle.kts` and update:
    - `applicationId` (your unique Play Store package name, e.g. `com.dhirenpathak.musicalhousie`)
-   - `APP_URL` (your published public URL)
    - `BANNER_AD_UNIT_ID` and `INTERSTITIAL_AD_UNIT_ID` (replace the Google test Ad Unit IDs with your real AdMob IDs)
 3. Open `android/app/src/main/AndroidManifest.xml` and replace `com.google.android.gms.ads.APPLICATION_ID` with your real AdMob App ID (`ca-app-pub-xxxxxxxxxxxxxxxx~yyyyyyyyyy`).
 

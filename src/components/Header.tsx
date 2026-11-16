@@ -1,3 +1,5 @@
+import { GlobalBranding } from './GlobalBranding.tsx';
+
 export type AppScreen =
   | 'home'
   | 'host-create'
@@ -24,20 +26,13 @@ export function Header({
   return (
     <header className="sticky top-0 z-30 border-b border-white/10 bg-[#080B18]/90 backdrop-blur-md">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-8 px-4 sm:px-6 py-3.5">
-        {/* Zone 1: Presenter avatar + wordmark */}
+        {/* Zone 1: Official Global Branding */}
         <button
           type="button"
           onClick={() => onNavigate('home')}
-          className="flex items-center gap-2.5 text-left min-w-0 hover:opacity-90 transition-opacity cursor-pointer"
+          className="text-left min-w-0 hover:opacity-90 transition-opacity cursor-pointer"
         >
-          <img
-            src="/assets/aistudio/Screenshot_2025-10-17_100636_78a1ec3b.png"
-            alt="Dhiren Pathak"
-            className="h-9 w-9 rounded-full object-cover object-top border border-amber-400/70 shrink-0"
-          />
-          <span className="font-display text-sm sm:text-base lg:text-lg font-bold tracking-tight text-white leading-tight truncate">
-            <span className="text-amber-300">Dhiren Pathak Present</span> Musical Housie
-          </span>
+          <GlobalBranding variant="header" />
         </button>
 
         {/* Zone 2: Clean single-line text nav links */}

@@ -59,6 +59,7 @@ import {
   WinnerRecord,
   WinningPattern,
 } from '../shared/types.ts';
+import { GlobalBranding } from './GlobalBranding.tsx';
 import { MusicVisualizer } from './MusicVisualizer.tsx';
 import { PlaylistSelector } from './PlaylistSelector.tsx';
 import { WinningPatternsBoard } from './WinningPatternsBoard.tsx';
@@ -551,7 +552,8 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
     <main className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-8 space-y-6">
       {/* Top Room Summary Bar */}
       <div className="rounded-3xl border border-white/10 bg-[#121830] p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-        <div className="space-y-1.5">
+        <div className="space-y-2.5">
+          <GlobalBranding variant="bar" />
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
             <span>Host: {room.hostName}</span>
             <span aria-hidden="true">·</span>

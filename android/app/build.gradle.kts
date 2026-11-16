@@ -14,11 +14,11 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
-        // Replace APP_URL with your published public web app URL if you change deployments
+        // Published Musical Housie public web app URL
         buildConfigField(
             "String",
             "APP_URL",
-            "\"https://ais-pre-r627uwcv5yhj5sbsayhzdv-953847587354.asia-southeast1.run.app\""
+            "\"https://musical-housie.ai.studio\""
         )
 
         // Google AdMob Test Ad Unit IDs — replace with your real AdMob Ad Unit IDs before release

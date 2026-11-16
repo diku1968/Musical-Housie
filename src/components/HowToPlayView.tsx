@@ -1,5 +1,7 @@
 import { ArrowLeft } from 'lucide-react';
 import { ALL_PATTERNS, PATTERN_DESCRIPTIONS, PATTERN_LABELS } from '../shared/types.ts';
+import { AdSenseSlot } from './AdSenseSlot.tsx';
+import { GlobalBranding } from './GlobalBranding.tsx';
 
 interface HowToPlayViewProps {
   onBack: () => void;
@@ -62,6 +64,8 @@ export function HowToPlayView({ onBack, onHostClick, onJoinClick }: HowToPlayVie
         <span>Back to Home</span>
       </button>
 
+      <GlobalBranding variant="bar" />
+
       <div className="space-y-3">
         <h1 className="font-display text-3xl sm:text-4xl font-extrabold text-white">
           How to Play Musical Housie
@@ -121,6 +125,12 @@ export function HowToPlayView({ onBack, onHostClick, onJoinClick }: HowToPlayVie
           >
             Join a Game
           </button>
+        </div>
+      </section>
+
+      <section className="pt-2">
+        <div className="mx-auto w-full max-w-4xl">
+          <AdSenseSlot adSlot="7886226195" />
         </div>
       </section>
     </main>

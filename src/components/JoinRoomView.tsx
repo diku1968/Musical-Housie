@@ -1,5 +1,6 @@
 import { ArrowLeft, Loader2, Users } from 'lucide-react';
 import { FormEvent, useState } from 'react';
+import { GlobalBranding } from './GlobalBranding.tsx';
 
 interface JoinRoomViewProps {
   initialRoomCode?: string;
@@ -56,6 +57,7 @@ export function JoinRoomView({
       </button>
 
       <div className="rounded-3xl border border-white/10 bg-[#121830] p-6 sm:p-8 shadow-xl space-y-6">
+        <GlobalBranding variant="bar" />
         <div className="space-y-1.5">
           <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-white">
             Join a Game
