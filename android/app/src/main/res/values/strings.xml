@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Musical Housie</string>
+    <string name="offline_title">Connection Lost</string>
+    <string name="offline_message">Please check your internet connection to continue playing Musical Housie.</string>
+    <string name="retry">Retry</string>
+</resources>

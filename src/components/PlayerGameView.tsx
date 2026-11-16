@@ -94,12 +94,11 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
   const [phoneAudioEnabled, setPhoneAudioEnabled] = useState(false);
   const [phoneAudioPlaySignal, setPhoneAudioPlaySignal] = useState(0);
   const [phonePlayerActive, setPhonePlayerActive] = useState(false);
-  const [autoTickEnabled, setAutoTickEnabled] = useState(true);
+  const [autoTickEnabled, setAutoTickEnabled] = useState(false);
   const [matchAlert, setMatchAlert] = useState<{ songId: string; title: string; artist: string; autoTicked: boolean } | null>(null);
 
   const notifiedMatchRef = useRef<string>('');
   const autoMarkingSigRef = useRef<string>('');
-  const spotifyAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     const unsubRoom = subscribeToRoom(
@@ -208,12 +207,12 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
       }
     }
 
-    if (activeMatchCell) {
+    if (autoTickEnabled && activeMatchCell) {
       setMatchAlert({
         songId: activeMatchCell.id,
         title: activeMatchCell.title,
         artist: activeMatchCell.artist,
-        autoTicked: autoTickEnabled,
+        autoTicked: true,
       });
 
       if (notifiedMatchRef.current !== activeMatchCell.id) {
@@ -240,16 +239,6 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
     playerUid,
   ]);
 
-  // Keep Spotify 30s preview <audio> in sync when phone audio is enabled
-  useEffect(() => {
-    const audioEl = spotifyAudioRef.current;
-    if (!audioEl) return;
-    if (!phoneAudioEnabled || room?.status !== 'playing' || !room?.currentMedia?.previewUrl) {
-      audioEl.pause();
-      return;
-    }
-    audioEl.play().catch(() => {});
-  }, [phoneAudioEnabled, phoneAudioPlaySignal, room?.status, room?.currentMedia?.previewUrl]);
 
   const winnersCountByPattern = useMemo(() => {
     const map = new Map<WinningPattern, number>();
@@ -295,9 +284,6 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
     }
     setPhoneAudioEnabled(true);
     setPhoneAudioPlaySignal((n) => n + 1);
-    if (spotifyAudioRef.current && room?.currentMedia?.previewUrl && room?.status === 'playing') {
-      spotifyAudioRef.current.play().catch(() => {});
-    }
   };
 
   const handleToggleSong = async (songId: string) => {
@@ -362,7 +348,6 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
 
   const mediaSourceType = room.currentMedia?.sourceType || room.sourceType;
   const mediaSourceId = room.currentMedia?.sourceId || '';
-  const mediaPreviewUrl = room.currentMedia?.previewUrl || '';
 
   return (
     <main className="mx-auto max-w-4xl px-4 sm:px-6 py-6 sm:py-8 pb-24 space-y-6">
@@ -578,27 +563,6 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
                     )}
                   </div>
                 )}
-
-                {phoneAudioEnabled && mediaSourceType === 'spotify' && (
-                  mediaPreviewUrl ? (
-                    <div className="space-y-1.5">
-                      <audio
-                        ref={spotifyAudioRef}
-                        src={mediaPreviewUrl}
-                        controls
-                        playsInline
-                        className="w-full h-10"
-                      />
-                      <p className="text-[11px] text-slate-400">
-                        Playing Spotify preview clip on your phone.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-slate-400">
-                      This Spotify track plays from the host&apos;s speaker (no 30s preview URL provided by Spotify). Matching songs on your ticket still notify and auto-tick automatically.
-                    </p>
-                  )
-                )}
               </div>
             )}
 
@@ -614,7 +578,9 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
               <div className="rounded-xl border border-white/10 bg-[#090D1C] px-4 py-3 text-sm text-slate-300">
                 {room.status === 'ended'
                   ? 'Game has ended. Thank you for playing!'
-                  : 'Songs matching your ticket notify you and auto-tick automatically (or tap any song manually).'}
+                  : autoTickEnabled
+                    ? 'Auto-Tick is ON — songs matching your ticket are ticked automatically as they play.'
+                    : 'Listen to the song and tap it on your ticket to mark it (or enable Auto-Tick below).'}
               </div>
             )}
           </div>
@@ -636,7 +602,7 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
                 <span className="text-xs text-slate-400">
                   {autoTickEnabled
                     ? 'Auto-tick is ON for matching songs · tap anytime to adjust'
-                    : 'Tap a song on your ticket to mark or unmark'}
+                    : 'Tap matching songs on your ticket to tick · turn on Auto-Tick if preferred'}
                 </span>
               </div>
 
@@ -646,7 +612,7 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
                 className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
                   autoTickEnabled
                     ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
-                    : 'border-white/15 bg-white/5 text-slate-300'
+                    : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
                 }`}
               >
                 Auto-Tick: {autoTickEnabled ? 'On' : 'Off'}
@@ -656,7 +622,7 @@ export function PlayerGameView({ roomCode, playerUid, onExitRoom }: PlayerGameVi
             <HousieTicket
               ticket={player.ticket}
               markedSongIds={player.markedSongIds}
-              activeMatchSongId={activeMatchCell?.id || ''}
+              activeMatchSongId={autoTickEnabled && activeMatchCell ? activeMatchCell.id : ''}
               onToggleSong={handleToggleSong}
               disabled={room.status === 'ended'}
             />

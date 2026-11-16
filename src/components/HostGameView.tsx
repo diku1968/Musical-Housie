@@ -1,10 +1,12 @@
 import confetti from 'canvas-confetti';
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   Clock,
   Copy,
   Download,
+  ExternalLink,
   Eye,
   EyeOff,
   Loader2,
@@ -51,6 +53,7 @@ import {
   HostSecretState,
   PATTERN_LABELS,
   PlayerData,
+  ProblemTrackItem,
   RoomData,
   WinnerClaim,
   WinnerRecord,
@@ -58,7 +61,6 @@ import {
 } from '../shared/types.ts';
 import { MusicVisualizer } from './MusicVisualizer.tsx';
 import { PlaylistSelector } from './PlaylistSelector.tsx';
-import { SpotifyPlayer } from './SpotifyPlayer.tsx';
 import { WinningPatternsBoard } from './WinningPatternsBoard.tsx';
 import { PlaybackProgressInfo, YouTubePlayer } from './YouTubePlayer.tsx';
 
@@ -101,6 +103,8 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
     isAdPlaying: false,
     playerPlaying: false,
   });
+  const [currentSongError, setCurrentSongError] = useState<ProblemTrackItem | null>(null);
+  const [playbackProblems, setPlaybackProblems] = useState<ProblemTrackItem[]>([]);
 
   useEffect(() => {
     const unsubRoom = subscribeToRoom(
@@ -272,16 +276,46 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
     `Join my Musical Housie game! Room Code: ${roomCode} — Open ${qrInviteUrl}`,
   )}`;
 
+  const copyTextSafely = async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Fallback for iOS Safari / WebKit when Clipboard API rejects
+    }
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return ok;
+    } catch {
+      return false;
+    }
+  };
+
   const handleCopyCode = async () => {
-    await navigator.clipboard.writeText(roomCode);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 1800);
+    const ok = await copyTextSafely(roomCode);
+    if (ok) {
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 1800);
+    }
   };
 
   const handleCopyLink = async () => {
-    await navigator.clipboard.writeText(qrInviteUrl);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 1800);
+    const ok = await copyTextSafely(qrInviteUrl);
+    if (ok) {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 1800);
+    }
   };
 
   const handleDownloadQr = () => {
@@ -389,6 +423,7 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
   const handleNextSong = async () => {
     if (!room || !secret) return;
     setError('');
+    setCurrentSongError(null);
     setAutoStopNotice(false);
     setActionBusy(true);
     try {
@@ -853,36 +888,82 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
                 )}
 
                 {currentTrack && room.status !== 'ended' && (
-                  <div className="pt-1">
-                    {currentTrack.sourceType === 'youtube' ? (
-                      <YouTubePlayer
-                        videoId={currentTrack.sourceId}
-                        isPlaying={room.status === 'playing'}
-                        playSignal={playSignal}
-                        stopSignal={stopSignal}
-                        clipDurationSeconds={clipDurationSeconds}
-                        onTrackEnded={handleNextSong}
-                        onAutoStop={handleAutoStop}
-                        onPlaybackError={(msg) => setError(msg)}
-                        onStateSync={(playing) => {
-                          const target = playing ? 'playing' : 'paused';
-                          if (room.status !== target && room.status !== 'ended') {
-                            setRoomPlaybackStatus(roomCode, target).catch(() => {});
-                          }
-                        }}
-                        onPlaybackProgress={setPlaybackProgress}
-                      />
-                    ) : (
-                      <SpotifyPlayer
-                        trackId={currentTrack.sourceId}
-                        previewUrl={currentTrack.previewUrl}
-                        isPlaying={room.status === 'playing'}
-                        stopSignal={stopSignal}
-                        clipDurationSeconds={clipDurationSeconds}
-                        onAutoStop={handleAutoStop}
-                        onPlaybackProgress={setPlaybackProgress}
-                      />
+                  <div className="pt-1 space-y-3">
+                    {currentSongError && currentSongError.sourceId === currentTrack.sourceId && (
+                      <div className="rounded-xl border border-rose-400/50 bg-rose-500/15 p-3.5 space-y-2.5 text-xs">
+                        <div className="flex items-start gap-2 text-rose-100">
+                          <AlertTriangle className="h-4 w-4 text-rose-300 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5 min-w-0">
+                            <p className="font-bold text-white">
+                              Problem Song (#{currentSongError.position}): {currentSongError.title}
+                            </p>
+                            <p className="text-rose-200">
+                              {currentSongError.artist} · {currentSongError.reason}
+                            </p>
+                            <p className="text-rose-100/90">
+                              Skip to the next song now, and remove this video from your YouTube playlist before the next game.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <a
+                            href={`https://www.youtube.com/watch?v=${encodeURIComponent(currentSongError.sourceId)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-white/15"
+                          >
+                            <span>Open Video on YouTube</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                          {remainingCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleNextSong}
+                              disabled={actionBusy}
+                              className="inline-flex items-center gap-1 rounded-lg bg-amber-400 px-3 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-amber-300 cursor-pointer"
+                            >
+                              <SkipForward className="h-3.5 w-3.5" />
+                              <span>Skip to Next Song</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     )}
+
+                    <YouTubePlayer
+                      videoId={currentTrack.sourceId}
+                      isPlaying={room.status === 'playing'}
+                      playSignal={playSignal}
+                      stopSignal={stopSignal}
+                      clipDurationSeconds={clipDurationSeconds}
+                      onTrackEnded={handleNextSong}
+                      onAutoStop={handleAutoStop}
+                      onPlaybackError={(msg) => {
+                        const problem: ProblemTrackItem = {
+                          position: room.currentSongNumber,
+                          sourceId: currentTrack.sourceId,
+                          title: currentTrack.title,
+                          artist: currentTrack.artist,
+                          reason: msg,
+                        };
+                        setCurrentSongError(problem);
+                        setPlaybackProblems((prev) =>
+                          prev.some((p) => p.sourceId === problem.sourceId)
+                            ? prev
+                            : [...prev, problem],
+                        );
+                        setError(
+                          `Problem playing Song #${room.currentSongNumber} "${currentTrack.title}" — ${msg}`,
+                        );
+                      }}
+                      onStateSync={(playing) => {
+                        const target = playing ? 'playing' : 'paused';
+                        if (room.status !== target && room.status !== 'ended') {
+                          setRoomPlaybackStatus(roomCode, target).catch(() => {});
+                        }
+                      }}
+                      onPlaybackProgress={setPlaybackProgress}
+                    />
                   </div>
                 )}
               </div>
@@ -1230,6 +1311,59 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
                 </div>
               )}
             </div>
+
+            {playbackProblems.length > 0 && (
+              <div className="rounded-3xl border border-rose-400/35 bg-rose-500/10 p-5 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-rose-200">
+                    <AlertTriangle className="h-4 w-4 text-rose-300 shrink-0" />
+                    <h3 className="font-display text-sm font-bold text-white">
+                      Problem Videos ({playbackProblems.length})
+                    </h3>
+                  </div>
+                  {room.playlistUrl && (
+                    <a
+                      href={room.playlistUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-200 underline hover:text-white"
+                    >
+                      <span>Open Playlist</span>
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+                <p className="text-xs text-rose-100/90">
+                  Remove these videos from your YouTube playlist after the game so they don&apos;t interrupt future rounds:
+                </p>
+                <div className="divide-y divide-rose-300/15 max-h-44 overflow-y-auto pr-1">
+                  {playbackProblems.map((prob) => (
+                    <div
+                      key={prob.sourceId}
+                      className="py-2 flex items-start justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-semibold text-white truncate">
+                          #{prob.position} · {prob.title}
+                        </div>
+                        <div className="text-[11px] text-rose-200 truncate">
+                          {prob.artist} · {prob.reason}
+                        </div>
+                      </div>
+                      <a
+                        href={`https://www.youtube.com/watch?v=${encodeURIComponent(prob.sourceId)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-[11px] font-semibold text-slate-200 hover:bg-white/10 shrink-0"
+                      >
+                        <span>YouTube</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1306,7 +1440,9 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
 
             <p className="text-[11px] text-slate-400 break-all">{qrInviteUrl}</p>
             <p className="text-[11px] text-amber-200/90 leading-relaxed">
-              Tip: If iPhone Safari shows a security cookie prompt on the preview URL, tap Authenticate in new window (or deploy/share the app from AI Studio and host from the published URL).
+              {hasSeparateSharedOrigin
+                ? 'iPhone tip: Preview links (ais-dev- / ais-pre-) often fail on iPhone due to Safari cookie blocking or 404 if unpublished. For iPhone players, click Share/Publish in AI Studio and open the published public link before hosting.'
+                : 'iPhone tip: If opening from WhatsApp or QR camera, tap "Open in Safari" if the page does not connect.'}
             </p>
 
             <div className="grid grid-cols-2 gap-2.5">

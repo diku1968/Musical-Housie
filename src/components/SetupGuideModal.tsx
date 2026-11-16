@@ -6,8 +6,6 @@ import { cleanupExpiredOrEndedHostedRooms } from '../services/gameService.ts';
 interface SetupGuideModalProps {
   open: boolean;
   onClose: () => void;
-  youtubeApiConfigured: boolean;
-  spotifyConfigured: boolean;
   needsAnonymousAuthSetup: boolean;
   onRetryAuth?: () => void;
   onGoogleFallback?: () => void;
@@ -16,8 +14,6 @@ interface SetupGuideModalProps {
 export function SetupGuideModal({
   open,
   onClose,
-  youtubeApiConfigured,
-  spotifyConfigured,
   needsAnonymousAuthSetup,
   onRetryAuth,
   onGoogleFallback,
@@ -170,32 +166,11 @@ export function SetupGuideModal({
               2. YouTube Playlists
             </h3>
             <span className="text-xs font-semibold text-emerald-300">
-              {youtubeApiConfigured ? 'API Key Active' : 'IFrame + oEmbed Active'}
+              Ready (No API Key Needed)
             </span>
           </div>
           <p className="text-sm text-slate-300 leading-relaxed">
-            Public and unlisted YouTube playlists work automatically when a host pastes a playlist link. Private YouTube playlists prompt the host to connect their Google/YouTube account when needed.
-          </p>
-        </section>
-
-        {/* Spotify Status */}
-        <section className="rounded-2xl border border-white/10 bg-[#0A0F20] p-5 space-y-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="font-display text-lg font-bold text-white">
-              3. Spotify Playlists
-            </h3>
-            <span
-              className={`text-xs font-semibold ${
-                spotifyConfigured ? 'text-emerald-300' : 'text-slate-400'
-              }`}
-            >
-              {spotifyConfigured ? 'Ready' : 'Not Enabled on Server'}
-            </span>
-          </div>
-          <p className="text-sm text-slate-300 leading-relaxed">
-            {spotifyConfigured
-              ? 'Public Spotify playlists load automatically using server authorization. Private playlists prompt the host to connect their own Spotify account via OAuth.'
-              : 'Spotify playlist import requires the application owner to configure Spotify server credentials. Hosts can use YouTube playlists anytime.'}
+            Public and unlisted YouTube playlists (including links copied from the mobile YouTube app) load automatically with zero API keys or developer accounts.
           </p>
         </section>
       </div>

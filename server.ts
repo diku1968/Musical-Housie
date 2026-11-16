@@ -7,12 +7,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  extractSpotifyPlaylistId,
+  extractFirstUrlFromInput,
   extractYouTubePlaylistId,
   generateUniqueTickets,
+  normalizeYouTubePlaylistUrl,
   verifyClaimAgainstPlayedSongs,
 } from './src/shared/gameLogic.ts';
-import type { TicketCell, TrackItem, WinningPattern } from './src/shared/types.ts';
+import type { ProblemTrackItem, TicketCell, TrackItem, WinningPattern } from './src/shared/types.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,68 +37,15 @@ function loadFirebaseConfig(): FirebaseAppletConfig | null {
   }
 }
 
-function getAppBaseUrl(): string {
-  const envUrl = process.env.APP_URL?.trim();
-  if (envUrl && envUrl !== 'MY_APP_URL') {
-    return envUrl.replace(/\/+$/, '');
-  }
-  return `http://localhost:${PORT}`;
-}
-
-interface SpotifySession {
-  ownerUid: string;
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt: number;
-  user: {
-    id: string;
-    displayName: string;
-    product: string;
-  };
-}
-
-interface YouTubeSession {
-  ownerUid: string;
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt: number;
-  user: {
-    displayName: string;
-  };
-}
-
-interface PendingOAuthState {
-  provider: 'spotify' | 'youtube';
-  ownerUid: string;
-  codeVerifier: string;
-  createdAt: number;
-}
-
-const spotifySessions = new Map<string, SpotifySession>();
-const youtubeSessions = new Map<string, YouTubeSession>();
-const oauthStates = new Map<string, PendingOAuthState>();
-
-let spotifyAppToken: { accessToken: string; expiresAt: number } | null = null;
 const tokenUidCache = new Map<string, { uid: string; expiresAt: number }>();
 
-function cleanExpiredStates() {
+function cleanExpiredTokenCache() {
   const now = Date.now();
-  for (const [state, entry] of oauthStates.entries()) {
-    if (now - entry.createdAt > 10 * 60 * 1000) {
-      oauthStates.delete(state);
-    }
-  }
   for (const [hash, cached] of tokenUidCache.entries()) {
     if (cached.expiresAt <= now) {
       tokenUidCache.delete(hash);
     }
   }
-}
-
-function createPkcePair(): { codeVerifier: string; codeChallenge: string } {
-  const codeVerifier = crypto.randomBytes(32).toString('base64url');
-  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
-  return { codeVerifier, codeChallenge };
 }
 
 async function verifyFirebaseAuth(
@@ -131,6 +79,7 @@ async function verifyFirebaseAuth(
     const uid = json.users?.[0]?.localId;
     if (!uid) return null;
 
+    cleanExpiredTokenCache();
     tokenUidCache.set(tokenHash, { uid, expiresAt: Date.now() + 30_000 });
     return { uid, idToken };
   } catch {
@@ -241,139 +190,6 @@ async function verifyRoomHostOwnership(
   }
 }
 
-async function getSpotifyAppAccessToken(): Promise<string | null> {
-  const clientId = process.env.SPOTIFY_CLIENT_ID?.trim();
-  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) return null;
-
-  if (spotifyAppToken && spotifyAppToken.expiresAt > Date.now()) {
-    return spotifyAppToken.accessToken;
-  }
-
-  const resp = await fetch('https://accounts.spotify.com/api/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-    },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-    }),
-  });
-
-  if (!resp.ok) return null;
-  const data = (await resp.json()) as { access_token: string; expires_in: number };
-  spotifyAppToken = {
-    accessToken: data.access_token,
-    expiresAt: Date.now() + (data.expires_in - 60) * 1000,
-  };
-  return spotifyAppToken.accessToken;
-}
-
-async function getHostSpotifySession(
-  req: Request,
-  ownerUid: string,
-): Promise<SpotifySession | null> {
-  const sid = req.cookies?.mh_spotify_sid as string | undefined;
-  if (!sid) return null;
-  const session = spotifySessions.get(sid);
-  if (!session || session.ownerUid !== ownerUid) {
-    return null;
-  }
-
-  if (session.expiresAt > Date.now()) {
-    return session;
-  }
-
-  // Refresh server-side without ever exposing refresh token to browser
-  const clientId = process.env.SPOTIFY_CLIENT_ID?.trim();
-  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET?.trim();
-  if (!session.refreshToken || !clientId || !clientSecret) {
-    spotifySessions.delete(sid);
-    return null;
-  }
-
-  try {
-    const resp = await fetch('https://accounts.spotify.com/api/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: session.refreshToken,
-      }),
-    });
-    if (!resp.ok) {
-      spotifySessions.delete(sid);
-      return null;
-    }
-    const tokenJson = (await resp.json()) as {
-      access_token: string;
-      refresh_token?: string;
-      expires_in: number;
-    };
-    session.accessToken = tokenJson.access_token;
-    if (tokenJson.refresh_token) session.refreshToken = tokenJson.refresh_token;
-    session.expiresAt = Date.now() + (tokenJson.expires_in - 60) * 1000;
-    return session;
-  } catch {
-    spotifySessions.delete(sid);
-    return null;
-  }
-}
-
-async function getHostYouTubeSession(
-  req: Request,
-  ownerUid: string,
-): Promise<YouTubeSession | null> {
-  const sid = req.cookies?.mh_yt_sid as string | undefined;
-  if (!sid) return null;
-  const session = youtubeSessions.get(sid);
-  if (!session || session.ownerUid !== ownerUid) {
-    return null;
-  }
-
-  if (session.expiresAt > Date.now()) {
-    return session;
-  }
-
-  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
-  if (!session.refreshToken || !clientId || !clientSecret) {
-    youtubeSessions.delete(sid);
-    return null;
-  }
-
-  try {
-    const resp = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: session.refreshToken,
-        grant_type: 'refresh_token',
-      }),
-    });
-    if (!resp.ok) {
-      youtubeSessions.delete(sid);
-      return null;
-    }
-    const tokenJson = (await resp.json()) as {
-      access_token: string;
-      expires_in: number;
-    };
-    session.accessToken = tokenJson.access_token;
-    session.expiresAt = Date.now() + (tokenJson.expires_in - 60) * 1000;
-    return session;
-  } catch {
-    youtubeSessions.delete(sid);
-    return null;
-  }
-}
-
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -385,214 +201,371 @@ async function startServer() {
     res.json({
       ok: true,
       firebaseConfigured: Boolean(fbConfig?.projectId),
-      youtubeApiConfigured: Boolean(process.env.YOUTUBE_API_KEY?.trim()),
-      youtubeOAuthConfigured: Boolean(
-        process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() &&
-          process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim(),
-      ),
-      spotifyConfigured: Boolean(
-        process.env.SPOTIFY_CLIENT_ID?.trim() && process.env.SPOTIFY_CLIENT_SECRET?.trim(),
-      ),
     });
   });
 
-  // Host-scoped YouTube authorization status
-  app.get('/api/youtube/status', async (req: Request, res: Response) => {
-    const authUser = await verifyFirebaseAuth(req);
-    const oauthConfigured = Boolean(
-      process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() &&
-        process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim(),
-    );
-    const session = authUser ? await getHostYouTubeSession(req, authUser.uid) : null;
+  const YOUTUBE_SCRAPE_HEADERS = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Accept-Language': 'en-US,en;q=0.9',
+    Cookie: 'SOCS=CAI',
+  };
 
-    res.json({
-      apiKeyConfigured: Boolean(process.env.YOUTUBE_API_KEY?.trim()),
-      oauthConfigured,
-      connected: Boolean(session),
-      user: session ? session.user : null,
-    });
-  });
+  function extractJsonObjectAfterPrefix(html: string, prefixRegex: RegExp): Record<string, unknown> | null {
+    const match = prefixRegex.exec(html);
+    if (!match) return null;
+    const startIdx = match.index + match[0].length - 1;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
 
-  // Google/YouTube OAuth Authorization Code + PKCE URL (used only when private playlist access requires it)
-  app.get('/api/youtube/auth-url', async (req: Request, res: Response) => {
-    const authUser = await verifyFirebaseAuth(req);
-    if (!authUser) {
-      res.status(401).json({ error: 'Authentication required to link YouTube.' });
-      return;
+    for (let i = startIdx; i < html.length; i++) {
+      const ch = html[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === '{') {
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(html.slice(startIdx, i + 1)) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        }
+      }
     }
+    return null;
+  }
 
-    const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim();
-    const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
-    if (!clientId || !clientSecret) {
-      res.status(503).json({
-        error:
-          'Private YouTube playlist authorization is not enabled on this server. Set the playlist to Unlisted or Public to load it without signing in.',
+  function decodeXmlEntities(text: string): string {
+    return text
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  }
+
+  async function resolveYouTubePlaylistIdWithRedirects(rawInput: string): Promise<string | null> {
+    const directId = extractYouTubePlaylistId(rawInput);
+    if (directId) return directId;
+
+    const candidateUrl = extractFirstUrlFromInput(rawInput);
+    if (!candidateUrl) return null;
+
+    try {
+      const parsed = new URL(candidateUrl);
+      const allowedHosts = ['youtube.com', 'youtu.be', 'yt.be', 'goo.gl'];
+      const isAllowed = allowedHosts.some(
+        (h) => parsed.hostname === h || parsed.hostname.endsWith(`.${h}`),
+      );
+      if (!isAllowed) return null;
+
+      const resp = await fetch(candidateUrl, {
+        headers: YOUTUBE_SCRAPE_HEADERS,
+        redirect: 'follow',
       });
-      return;
+      const resolvedFromFinalUrl = extractYouTubePlaylistId(resp.url);
+      if (resolvedFromFinalUrl) return resolvedFromFinalUrl;
+
+      const body = await resp.text();
+      const canonicalMatch = body.match(
+        /<link\s+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i,
+      );
+      if (canonicalMatch?.[1]) {
+        const fromCanonical = extractYouTubePlaylistId(canonicalMatch[1]);
+        if (fromCanonical) return fromCanonical;
+      }
+      const ogUrlMatch = body.match(
+        /<meta\s+property=["']og:url["'][^>]*content=["']([^"']+)["']/i,
+      );
+      if (ogUrlMatch?.[1]) {
+        const fromOg = extractYouTubePlaylistId(ogUrlMatch[1]);
+        if (fromOg) return fromOg;
+      }
+    } catch {
+      // Ignore redirect resolution failure
     }
+    return null;
+  }
 
-    cleanExpiredStates();
-    const state = crypto.randomBytes(16).toString('hex');
-    const { codeVerifier, codeChallenge } = createPkcePair();
-    oauthStates.set(state, {
-      provider: 'youtube',
-      ownerUid: authUser.uid,
-      codeVerifier,
-      createdAt: Date.now(),
-    });
+  async function checkYouTubeVideoEmbeddable(
+    videoId: string,
+  ): Promise<{ embeddable: boolean; reason?: string }> {
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
+      const resp = await fetch(oembedUrl, { signal: AbortSignal.timeout(2500) });
+      if (resp.ok) {
+        return { embeddable: true };
+      }
+      if (resp.status === 401 || resp.status === 403) {
+        return {
+          embeddable: false,
+          reason: 'Embedding disabled by video owner (cannot play in web player)',
+        };
+      }
+      if (resp.status === 404 || resp.status === 400) {
+        return {
+          embeddable: false,
+          reason: 'Video is private, deleted, or unavailable',
+        };
+      }
+      // Transient 429/5xx -> don't wrongly exclude playable tracks
+      return { embeddable: true };
+    } catch {
+      return { embeddable: true };
+    }
+  }
 
-    const redirectUri = `${getAppBaseUrl()}/auth/youtube/callback`;
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/youtube.readonly',
-      state,
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256',
-      access_type: 'offline',
-      prompt: 'consent',
-    });
+  async function resolvePublicYouTubePlaylistFromWeb(playlistId: string): Promise<{
+    playlistName: string;
+    tracks: TrackItem[];
+    problemTracks: ProblemTrackItem[];
+    isPrivateOrUnavailable: boolean;
+  }> {
+    let playlistName = 'YouTube Playlist';
+    let isPrivateOrUnavailable = false;
+    const candidateTracks: Array<TrackItem & { position: number }> = [];
+    const problemTracks: ProblemTrackItem[] = [];
+    const seenIds = new Set<string>();
+    const seenProblemKeys = new Set<string>();
+    let discoveredOrder = 0;
 
-    res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}` });
-  });
+    const addProblemTrack = (item: ProblemTrackItem) => {
+      const key = item.sourceId || `${item.position ?? 0}:${item.title}`;
+      if (seenProblemKeys.has(key)) return;
+      seenProblemKeys.add(key);
+      problemTracks.push(item);
+    };
 
-  // Google/YouTube OAuth Callback
-  app.get(
-    ['/auth/youtube/callback', '/auth/youtube/callback/'],
-    async (req: Request, res: Response) => {
-      const { code, state, error } = req.query as {
-        code?: string;
-        state?: string;
-        error?: string;
-      };
+    const addTrack = (videoId: string, title: string, artist: string, thumbnailUrl?: string) => {
+      const cleanTitle = title.trim();
+      const isUnavailablePlaceholder =
+        !cleanTitle ||
+        cleanTitle === 'Private video' ||
+        cleanTitle === 'Deleted video' ||
+        cleanTitle === '[Private video]' ||
+        cleanTitle === '[Deleted video]';
 
-      const pending = state ? oauthStates.get(state) : undefined;
-      if (error || !code || !state || !pending || pending.provider !== 'youtube') {
-        res.status(400).send(`
-          <html>
-            <body style="font-family:sans-serif;background:#090D1A;color:#fff;padding:32px;">
-              <h2>YouTube Authorization Cancelled or Invalid</h2>
-              <p>${error ? String(error) : 'Missing or expired authorization state.'}</p>
-              <script>
-                if (window.opener) {
-                  window.opener.postMessage({ type: 'YOUTUBE_OAUTH_ERROR', error: 'Authorization failed' }, '*');
-                  setTimeout(() => window.close(), 1200);
-                }
-              </script>
-            </body>
-          </html>
-        `);
+      if (isUnavailablePlaceholder) {
+        discoveredOrder++;
+        addProblemTrack({
+          position: discoveredOrder,
+          sourceId: /^[a-zA-Z0-9_-]{11}$/.test(videoId) ? videoId : '',
+          title: cleanTitle || 'Unavailable Video',
+          artist: artist.trim() || 'YouTube',
+          reason: 'Private or deleted video in YouTube playlist',
+        });
         return;
       }
 
-      oauthStates.delete(state);
+      if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId) || seenIds.has(videoId)) return;
+      seenIds.add(videoId);
+      discoveredOrder++;
+      candidateTracks.push({
+        position: discoveredOrder,
+        id: `yt_${videoId}`,
+        title: cleanTitle,
+        artist: (artist.trim() || 'YouTube').replace(/\s*-\s*Topic$/, ''),
+        sourceId: videoId,
+        sourceType: 'youtube',
+        thumbnailUrl: thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+      });
+    };
 
-      try {
-        const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID!.trim();
-        const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET!.trim();
-        const redirectUri = `${getAppBaseUrl()}/auth/youtube/callback`;
+    try {
+      const resp = await fetch(
+        `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`,
+        { headers: YOUTUBE_SCRAPE_HEADERS },
+      );
+      if (resp.ok) {
+        const html = await resp.text();
+        const data = extractJsonObjectAfterPrefix(html, /(?:var\s+ytInitialData|window\["ytInitialData"\])\s*=\s*\{/);
 
-        const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            client_id: clientId,
-            client_secret: clientSecret,
-            code,
-            code_verifier: pending.codeVerifier,
-            grant_type: 'authorization_code',
-            redirect_uri: redirectUri,
-          }),
-        });
+        if (data) {
+          const metaTitle = (
+            (data.metadata as { playlistMetadataRenderer?: { title?: string } })
+              ?.playlistMetadataRenderer?.title ||
+            (data.header as { playlistHeaderRenderer?: { title?: { simpleText?: string } } })
+              ?.playlistHeaderRenderer?.title?.simpleText ||
+            ''
+          ).trim();
+          if (metaTitle) playlistName = metaTitle;
 
-        if (!tokenResp.ok) {
-          const errBody = await tokenResp.text();
-          throw new Error(`Google token exchange failed: ${errBody}`);
-        }
-
-        const tokenJson = (await tokenResp.json()) as {
-          access_token: string;
-          refresh_token?: string;
-          expires_in: number;
-        };
-
-        let displayName = 'YouTube Account';
-        try {
-          const chanResp = await fetch(
-            'https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true',
-            {
-              headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-            },
-          );
-          if (chanResp.ok) {
-            const chanJson = (await chanResp.json()) as {
-              items?: Array<{ snippet?: { title?: string } }>;
-            };
-            displayName = chanJson.items?.[0]?.snippet?.title || displayName;
+          const alerts = data.alerts as Array<{
+            alertRenderer?: { text?: { simpleText?: string; runs?: Array<{ text?: string }> } };
+          }> | undefined;
+          if (Array.isArray(alerts)) {
+            const alertText = alerts
+              .map(
+                (a) =>
+                  a.alertRenderer?.text?.simpleText ||
+                  a.alertRenderer?.text?.runs?.map((r) => r.text || '').join('') ||
+                  '',
+              )
+              .join(' ')
+              .toLowerCase();
+            if (
+              alertText.includes('does not exist') ||
+              alertText.includes('private') ||
+              alertText.includes('not viewable')
+            ) {
+              isPrivateOrUnavailable = true;
+            }
           }
-        } catch {
-          // Optional channel label
+
+          const visit = (node: unknown) => {
+            if (!node || typeof node !== 'object' || candidateTracks.length >= 200) return;
+            if (Array.isArray(node)) {
+              for (const item of node) visit(item);
+              return;
+            }
+            const obj = node as Record<string, unknown>;
+
+            if (obj.playlistVideoRenderer && typeof obj.playlistVideoRenderer === 'object') {
+              const pvr = obj.playlistVideoRenderer as {
+                videoId?: string;
+                title?: { simpleText?: string; runs?: Array<{ text?: string }> };
+                shortBylineText?: { runs?: Array<{ text?: string }> };
+                longBylineText?: { runs?: Array<{ text?: string }> };
+                thumbnail?: { thumbnails?: Array<{ url?: string }> };
+              };
+              const vid = pvr.videoId || '';
+              const title =
+                pvr.title?.runs?.map((r) => r.text || '').join('') ||
+                pvr.title?.simpleText ||
+                '';
+              const artist =
+                pvr.shortBylineText?.runs?.[0]?.text ||
+                pvr.longBylineText?.runs?.[0]?.text ||
+                'YouTube';
+              const thumb = pvr.thumbnail?.thumbnails?.[0]?.url;
+              addTrack(vid, title, artist, thumb);
+            }
+
+            if (obj.lockupViewModel && typeof obj.lockupViewModel === 'object') {
+              const lvm = obj.lockupViewModel as {
+                contentId?: string;
+                contentType?: string;
+                metadata?: {
+                  lockupMetadataViewModel?: {
+                    title?: { content?: string };
+                    metadata?: {
+                      contentMetadataViewModel?: {
+                        metadataRows?: Array<{
+                          metadataParts?: Array<{ text?: { content?: string } }>;
+                        }>;
+                      };
+                    };
+                  };
+                };
+                contentImage?: {
+                  thumbnailViewModel?: {
+                    image?: { sources?: Array<{ url?: string }> };
+                  };
+                };
+              };
+              const vid = lvm.contentId || '';
+              const lm = lvm.metadata?.lockupMetadataViewModel;
+              const title = lm?.title?.content || '';
+              const artist =
+                lm?.metadata?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]
+                  ?.text?.content || 'YouTube';
+              const thumb = lvm.contentImage?.thumbnailViewModel?.image?.sources?.[0]?.url;
+              if (title) {
+                addTrack(vid, title, artist, thumb);
+              }
+            }
+
+            for (const val of Object.values(obj)) {
+              if (val && typeof val === 'object') visit(val);
+            }
+          };
+
+          visit(data.contents || data);
+        } else {
+          const titleTag = html.match(/<title>([^<]+)<\/title>/i)?.[1];
+          if (titleTag) {
+            const clean = decodeXmlEntities(titleTag).replace(/\s*-\s*YouTube$/i, '').trim();
+            if (clean && clean.toLowerCase() !== 'youtube') playlistName = clean;
+          }
         }
-
-        const sid = crypto.randomBytes(24).toString('hex');
-        youtubeSessions.set(sid, {
-          ownerUid: pending.ownerUid,
-          accessToken: tokenJson.access_token,
-          refreshToken: tokenJson.refresh_token,
-          expiresAt: Date.now() + (tokenJson.expires_in - 60) * 1000,
-          user: { displayName },
-        });
-
-        res.cookie('mh_yt_sid', sid, {
-          httpOnly: true,
-          secure: true,
-          sameSite: 'none',
-          maxAge: 24 * 3600 * 1000,
-        });
-
-        res.send(`
-          <html>
-            <body style="font-family:sans-serif;background:#090D1A;color:#fff;padding:32px;">
-              <p>YouTube connected successfully. Closing window...</p>
-              <script>
-                if (window.opener) {
-                  window.opener.postMessage({ type: 'YOUTUBE_OAUTH_SUCCESS' }, '*');
-                  window.close();
-                } else {
-                  window.location.href = '/';
-                }
-              </script>
-            </body>
-          </html>
-        `);
-      } catch (err) {
-        res.status(500).send(`
-          <html>
-            <body style="font-family:sans-serif;background:#090D1A;color:#fff;padding:32px;">
-              <h2>YouTube Connection Failed</h2>
-              <p>${err instanceof Error ? err.message : 'Unknown error'}</p>
-            </body>
-          </html>
-        `);
       }
-    },
-  );
+    } catch {
+      // Fall through to RSS fallback
+    }
 
-  app.post('/api/youtube/disconnect', async (req: Request, res: Response) => {
-    const authUser = await verifyFirebaseAuth(req);
-    const sid = req.cookies?.mh_yt_sid as string | undefined;
-    if (sid && authUser) {
-      const session = youtubeSessions.get(sid);
-      if (session && session.ownerUid === authUser.uid) {
-        youtubeSessions.delete(sid);
+    if (candidateTracks.length === 0) {
+      try {
+        const rssResp = await fetch(
+          `https://www.youtube.com/feeds/videos.xml?playlist_id=${encodeURIComponent(playlistId)}`,
+          { headers: YOUTUBE_SCRAPE_HEADERS },
+        );
+        if (rssResp.ok) {
+          const xml = await rssResp.text();
+          const feedTitle = xml.match(/<feed[\s\S]*?<title>([^<]+)<\/title>/)?.[1];
+          if (feedTitle) playlistName = decodeXmlEntities(feedTitle);
+
+          const entryMatches = xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g);
+          for (const entryMatch of entryMatches) {
+            const entry = entryMatch[1];
+            const vid = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1]?.trim() || '';
+            const title = decodeXmlEntities(entry.match(/<title>([^<]+)<\/title>/)?.[1] || '');
+            const artist = decodeXmlEntities(
+              entry.match(/<author>\s*<name>([^<]+)<\/name>/)?.[1] || 'YouTube',
+            );
+            addTrack(vid, title, artist);
+          }
+        }
+      } catch {
+        // Ignore RSS fallback failure
       }
     }
-    res.clearCookie('mh_yt_sid', { secure: true, sameSite: 'none' });
-    res.json({ ok: true });
-  });
 
-  // Official YouTube Data API v3 playlist loader (app owner API key for public, host OAuth for private)
+    // Verify embeddability of each track via fast batched YouTube oEmbed checks
+    const tracks: TrackItem[] = [];
+    for (let i = 0; i < candidateTracks.length; i += 20) {
+      const batch = candidateTracks.slice(i, i + 20);
+      const checks = await Promise.all(
+        batch.map(async (item) => {
+          const check = await checkYouTubeVideoEmbeddable(item.sourceId);
+          return { item, check };
+        }),
+      );
+      for (const { item, check } of checks) {
+        if (check.embeddable) {
+          const { position: _pos, ...cleanTrack } = item;
+          tracks.push(cleanTrack);
+        } else {
+          addProblemTrack({
+            position: item.position,
+            sourceId: item.sourceId,
+            title: item.title,
+            artist: item.artist,
+            reason: check.reason || 'Video cannot be embedded in player',
+          });
+        }
+      }
+    }
+
+    problemTracks.sort((a, b) => (a.position || 9999) - (b.position || 9999));
+
+    return { playlistName, tracks, problemTracks, isPrivateOrUnavailable };
+  }
+
+  // Official YouTube Data API v3 playlist loader + direct web/RSS public playlist loader
   app.post('/api/youtube/playlist', async (req: Request, res: Response) => {
     try {
       const authUser = await verifyFirebaseAuth(req);
@@ -619,208 +592,80 @@ async function startServer() {
         return;
       }
 
-      const playlistId = extractYouTubePlaylistId(playlistUrl);
+      const playlistId = await resolveYouTubePlaylistIdWithRedirects(playlistUrl);
       if (!playlistId) {
+        const isSingleVideoUrl =
+          /(youtu\.be\/|(www\.|m\.|music\.)?youtube\.com\/(watch|shorts|live))/i.test(
+            playlistUrl,
+          );
         res.status(400).json({
-          error:
-            'Invalid YouTube playlist URL. Make sure the URL contains a "?list=..." playlist parameter.',
+          error: isSingleVideoUrl
+            ? 'That looks like a single YouTube video link without a playlist ("list="). In the YouTube app, open your Playlist page, tap Share → Copy link, and paste it here.'
+            : 'Invalid YouTube playlist URL. Make sure the link contains a "?list=" playlist ID (e.g., https://youtube.com/playlist?list=PL...).',
         });
         return;
       }
 
-      const ytSession = authUser ? await getHostYouTubeSession(req, authUser.uid) : null;
-      const apiKey = process.env.YOUTUBE_API_KEY?.trim();
-      const oauthConfigured = Boolean(
-        process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() &&
-          process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim(),
-      );
+      if (playlistId === 'WL' || playlistId === 'LL') {
+        res.status(400).json({
+          error:
+            'Watch Later and Liked Videos are private to your account. Please create or share a Public or Unlisted playlist link instead.',
+        });
+        return;
+      }
 
-      if (!ytSession && !apiKey) {
-        res.json({
+      const canonicalUrl = normalizeYouTubePlaylistUrl(playlistId);
+      const webResolved = await resolvePublicYouTubePlaylistFromWeb(playlistId);
+
+      if (webResolved.tracks.length > 0 || webResolved.problemTracks.length > 0) {
+        if (webResolved.tracks.length > 0) {
+          res.json({
+            ok: true,
+            sourceType: 'youtube',
+            playlistId,
+            canonicalUrl,
+            playlistName: webResolved.playlistName,
+            totalFound: webResolved.tracks.length,
+            skippedRestricted: webResolved.problemTracks.length,
+            tracks: webResolved.tracks,
+            problemTracks: webResolved.problemTracks,
+          });
+          return;
+        }
+      }
+
+      if (webResolved.isPrivateOrUnavailable) {
+        res.status(400).json({
           ok: false,
-          code: 'YOUTUBE_API_KEY_MISSING',
+          code: 'PLAYLIST_UNAVAILABLE',
           playlistId,
-          oauthConfigured,
-          message: 'Falling back to official YouTube IFrame Player + oEmbed loader.',
-        });
-        return;
-      }
-
-      const ytHeaders: Record<string, string> = {};
-      const appendAuth = (url: URL) => {
-        if (ytSession) {
-          ytHeaders.Authorization = `Bearer ${ytSession.accessToken}`;
-        } else if (apiKey) {
-          url.searchParams.set('key', apiKey);
-        }
-      };
-
-      // 1. Fetch playlist metadata
-      const metaUrl = new URL('https://www.googleapis.com/youtube/v3/playlists');
-      metaUrl.searchParams.set('part', 'snippet,status');
-      metaUrl.searchParams.set('id', playlistId);
-      appendAuth(metaUrl);
-
-      const metaResp = await fetch(metaUrl.toString(), { headers: ytHeaders });
-      const metaData = (await metaResp.json()) as {
-        error?: { message?: string; code?: number };
-        items?: Array<{
-          snippet?: { title?: string; channelTitle?: string };
-          status?: { privacyStatus?: string };
-        }>;
-      };
-
-      if (!metaResp.ok) {
-        if ((metaResp.status === 403 || metaResp.status === 404) && !ytSession) {
-          res.status(403).json({
-            code: 'PRIVATE_PLAYLIST_AUTH_REQUIRED',
-            requiresYouTubeAuth: true,
-            oauthConfigured,
-            error:
-              'This YouTube playlist is private or restricted. Connect your Google/YouTube account to access private playlists, or set the playlist visibility to Unlisted or Public.',
-          });
-          return;
-        }
-        res.status(metaResp.status === 403 ? 403 : 502).json({
-          error: metaData.error?.message || 'YouTube Data API request failed.',
-        });
-        return;
-      }
-
-      const playlistItem = metaData.items?.[0];
-      if (!playlistItem) {
-        if (!ytSession) {
-          res.status(403).json({
-            code: 'PRIVATE_PLAYLIST_AUTH_REQUIRED',
-            requiresYouTubeAuth: true,
-            oauthConfigured,
-            error:
-              'Playlist not found or is set to Private. Connect your Google/YouTube account to access your private playlists, or set the playlist to Public or Unlisted.',
-          });
-          return;
-        }
-        res.status(404).json({
+          canonicalUrl,
           error:
-            'Playlist not found or your connected Google/YouTube account does not have permission to view it.',
+            'This YouTube playlist is Private or unavailable. In the YouTube app, set your playlist visibility to Public or Unlisted and try again.',
         });
         return;
       }
 
-      const playlistName = playlistItem.snippet?.title || 'YouTube Playlist';
-
-      // 2. Fetch playlist items (up to 4 pages = 200 items)
-      const rawItems: Array<{
-        videoId: string;
-        title: string;
-        artist: string;
-        thumbnailUrl?: string;
-      }> = [];
-      let nextPageToken: string | undefined;
-
-      for (let page = 0; page < 4; page++) {
-        const itemsUrl = new URL('https://www.googleapis.com/youtube/v3/playlistItems');
-        itemsUrl.searchParams.set('part', 'snippet,status');
-        itemsUrl.searchParams.set('playlistId', playlistId);
-        itemsUrl.searchParams.set('maxResults', '50');
-        appendAuth(itemsUrl);
-        if (nextPageToken) itemsUrl.searchParams.set('pageToken', nextPageToken);
-
-        const itemsResp = await fetch(itemsUrl.toString(), { headers: ytHeaders });
-        if (!itemsResp.ok) break;
-        const itemsJson = (await itemsResp.json()) as {
-          nextPageToken?: string;
-          items?: Array<{
-            snippet?: {
-              title?: string;
-              videoOwnerChannelTitle?: string;
-              resourceId?: { videoId?: string };
-              thumbnails?: { medium?: { url?: string }; default?: { url?: string } };
-            };
-            status?: { privacyStatus?: string };
-          }>;
-        };
-
-        for (const item of itemsJson.items || []) {
-          const videoId = item.snippet?.resourceId?.videoId;
-          const title = item.snippet?.title || '';
-          const privacy = item.status?.privacyStatus;
-          if (
-            videoId &&
-            (ytSession || privacy !== 'private') &&
-            title !== 'Private video' &&
-            title !== 'Deleted video'
-          ) {
-            rawItems.push({
-              videoId,
-              title,
-              artist: (item.snippet?.videoOwnerChannelTitle || 'YouTube').replace(/\s*-\s*Topic$/, ''),
-              thumbnailUrl:
-                item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url,
-            });
-          }
-        }
-
-        nextPageToken = itemsJson.nextPageToken;
-        if (!nextPageToken) break;
-      }
-
-      if (rawItems.length === 0) {
+      if (webResolved.problemTracks.length > 0) {
         res.status(400).json({
-          error: 'This YouTube playlist has no accessible videos.',
+          ok: false,
+          code: 'ALL_TRACKS_UNPLAYABLE',
+          playlistId,
+          canonicalUrl,
+          problemTracks: webResolved.problemTracks,
+          error:
+            'All videos found in this playlist are private, deleted, or have embedding disabled by the uploader. Please check the problem videos listed below.',
         });
         return;
       }
 
-      // 3. Verify embeddability via videos endpoint in chunks of 50
-      const embeddableIds = new Set<string>();
-      for (let i = 0; i < rawItems.length; i += 50) {
-        const chunk = rawItems.slice(i, i + 50).map((x) => x.videoId);
-        const vidUrl = new URL('https://www.googleapis.com/youtube/v3/videos');
-        vidUrl.searchParams.set('part', 'status');
-        vidUrl.searchParams.set('id', chunk.join(','));
-        appendAuth(vidUrl);
-
-        const vidResp = await fetch(vidUrl.toString(), { headers: ytHeaders });
-        if (vidResp.ok) {
-          const vidJson = (await vidResp.json()) as {
-            items?: Array<{
-              id: string;
-              status?: { embeddable?: boolean; privacyStatus?: string };
-            }>;
-          };
-          for (const v of vidJson.items || []) {
-            if (v.status?.embeddable !== false && (ytSession || v.status?.privacyStatus !== 'private')) {
-              embeddableIds.add(v.id);
-            }
-          }
-        }
-      }
-
-      const seen = new Set<string>();
-      const tracks: TrackItem[] = [];
-      for (const item of rawItems) {
-        if (!embeddableIds.has(item.videoId)) continue;
-        if (seen.has(item.videoId)) continue;
-        seen.add(item.videoId);
-        tracks.push({
-          id: `yt_${item.videoId}`,
-          title: item.title,
-          artist: item.artist,
-          sourceId: item.videoId,
-          sourceType: 'youtube',
-          thumbnailUrl: item.thumbnailUrl,
-        });
-      }
-
-      const skippedCount = rawItems.length - tracks.length;
       res.json({
-        ok: true,
-        sourceType: 'youtube',
+        ok: false,
+        code: 'YOUTUBE_IFRAME_FALLBACK',
         playlistId,
-        playlistName,
-        totalFound: rawItems.length,
-        skippedRestricted: skippedCount,
-        tracks,
+        canonicalUrl,
+        playlistName: webResolved.playlistName,
+        message: 'Falling back to official YouTube IFrame Player + oEmbed loader.',
       });
     } catch (error) {
       res.status(500).json({
@@ -843,41 +688,90 @@ async function startServer() {
       ).slice(0, 100);
 
       const tracks: TrackItem[] = [];
-      let skipped = 0;
+      const problemTracks: ProblemTrackItem[] = [];
+
+      const fetchFallbackWatchTitle = async (videoId: string): Promise<string> => {
+        try {
+          const watchResp = await fetch(
+            `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
+            { headers: YOUTUBE_SCRAPE_HEADERS, signal: AbortSignal.timeout(2000) },
+          );
+          if (!watchResp.ok) return '';
+          const html = await watchResp.text();
+          const titleTag = html.match(/<title>([^<]+)<\/title>/i)?.[1];
+          if (!titleTag) return '';
+          const clean = decodeXmlEntities(titleTag).replace(/\s*-\s*YouTube$/i, '').trim();
+          return clean && clean.toLowerCase() !== 'youtube' ? clean : '';
+        } catch {
+          return '';
+        }
+      };
 
       for (let i = 0; i < uniqueIds.length; i += 10) {
         const batch = uniqueIds.slice(i, i + 10);
         const results = await Promise.all(
-          batch.map(async (videoId) => {
+          batch.map(async (videoId, batchIdx) => {
+            const position = i + batchIdx + 1;
             try {
               const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
-              const resp = await fetch(oembedUrl);
-              if (!resp.ok) return null;
+              const resp = await fetch(oembedUrl, { signal: AbortSignal.timeout(2500) });
+              if (!resp.ok) {
+                const reason =
+                  resp.status === 401 || resp.status === 403
+                    ? 'Embedding disabled by video owner (cannot play in web player)'
+                    : 'Video is private, deleted, or unavailable';
+                const title = (await fetchFallbackWatchTitle(videoId)) || `Unavailable Video (${videoId})`;
+                return {
+                  track: null,
+                  problem: { position, sourceId: videoId, title, reason } satisfies ProblemTrackItem,
+                };
+              }
               const data = (await resp.json()) as {
                 title?: string;
                 author_name?: string;
                 thumbnail_url?: string;
               };
-              if (!data.title) return null;
+              if (!data.title) {
+                return {
+                  track: null,
+                  problem: {
+                    position,
+                    sourceId: videoId,
+                    title: `Video ${videoId}`,
+                    reason: 'Missing video title metadata',
+                  } satisfies ProblemTrackItem,
+                };
+              }
               return {
-                id: `yt_${videoId}`,
-                title: data.title,
-                artist: (data.author_name || 'YouTube').replace(/\s*-\s*Topic$/, ''),
-                sourceId: videoId,
-                sourceType: 'youtube' as const,
-                thumbnailUrl: data.thumbnail_url,
+                track: {
+                  id: `yt_${videoId}`,
+                  title: data.title,
+                  artist: (data.author_name || 'YouTube').replace(/\s*-\s*Topic$/, ''),
+                  sourceId: videoId,
+                  sourceType: 'youtube' as const,
+                  thumbnailUrl: data.thumbnail_url,
+                },
+                problem: null,
               };
             } catch {
-              return null;
+              return {
+                track: null,
+                problem: {
+                  position,
+                  sourceId: videoId,
+                  title: `Video ${videoId}`,
+                  reason: 'Could not load video metadata from YouTube',
+                } satisfies ProblemTrackItem,
+              };
             }
           }),
         );
 
         for (const item of results) {
-          if (item) {
-            tracks.push(item);
-          } else {
-            skipped++;
+          if (item.track) {
+            tracks.push(item.track);
+          } else if (item.problem) {
+            problemTracks.push(item.problem);
           }
         }
       }
@@ -885,7 +779,8 @@ async function startServer() {
       res.json({
         ok: true,
         tracks,
-        skippedRestricted: skipped,
+        problemTracks,
+        skippedRestricted: problemTracks.length,
       });
     } catch (error) {
       res.status(500).json({
@@ -894,354 +789,7 @@ async function startServer() {
     }
   });
 
-  // Host-scoped Spotify OAuth Status (never leaks tokens or client secret)
-  app.get('/api/spotify/status', async (req: Request, res: Response) => {
-    const configured = Boolean(
-      process.env.SPOTIFY_CLIENT_ID?.trim() && process.env.SPOTIFY_CLIENT_SECRET?.trim(),
-    );
-    const authUser = await verifyFirebaseAuth(req);
-    const session = authUser ? await getHostSpotifySession(req, authUser.uid) : null;
-
-    res.json({
-      configured,
-      connected: Boolean(session),
-      user: session ? session.user : null,
-    });
-  });
-
-  // Spotify OAuth Authorization Code + PKCE URL generator (bound to host Firebase UID)
-  app.get('/api/spotify/auth-url', async (req: Request, res: Response) => {
-    const authUser = await verifyFirebaseAuth(req);
-    if (!authUser) {
-      res.status(401).json({ error: 'Authentication required to connect Spotify.' });
-      return;
-    }
-
-    const clientId = process.env.SPOTIFY_CLIENT_ID?.trim();
-    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET?.trim();
-    if (!clientId || !clientSecret) {
-      res.status(503).json({
-        error: 'Spotify integration is not configured on this server.',
-      });
-      return;
-    }
-
-    cleanExpiredStates();
-    const state = crypto.randomBytes(16).toString('hex');
-    const { codeVerifier, codeChallenge } = createPkcePair();
-    oauthStates.set(state, {
-      provider: 'spotify',
-      ownerUid: authUser.uid,
-      codeVerifier,
-      createdAt: Date.now(),
-    });
-
-    const redirectUri = `${getAppBaseUrl()}/auth/spotify/callback`;
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: clientId,
-      scope: 'playlist-read-private playlist-read-collaborative user-read-private',
-      redirect_uri: redirectUri,
-      state,
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256',
-      show_dialog: 'true',
-    });
-
-    res.json({ url: `https://accounts.spotify.com/authorize?${params.toString()}` });
-  });
-
-  // Spotify OAuth Callback (validates state, exchanges code + PKCE verifier + client secret)
-  app.get(
-    ['/auth/spotify/callback', '/auth/spotify/callback/'],
-    async (req: Request, res: Response) => {
-      const { code, state, error } = req.query as {
-        code?: string;
-        state?: string;
-        error?: string;
-      };
-
-      const pending = state ? oauthStates.get(state) : undefined;
-      if (error || !code || !state || !pending || pending.provider !== 'spotify') {
-        res.status(400).send(`
-          <html>
-            <body style="font-family:sans-serif;background:#090D1A;color:#fff;padding:32px;">
-              <h2>Spotify Authorization Cancelled or Invalid</h2>
-              <p>${error ? String(error) : 'Missing or expired authorization state.'}</p>
-              <script>
-                if (window.opener) {
-                  window.opener.postMessage({ type: 'SPOTIFY_OAUTH_ERROR', error: 'Authorization failed' }, '*');
-                  setTimeout(() => window.close(), 1200);
-                }
-              </script>
-            </body>
-          </html>
-        `);
-        return;
-      }
-
-      oauthStates.delete(state);
-
-      try {
-        const clientId = process.env.SPOTIFY_CLIENT_ID!.trim();
-        const clientSecret = process.env.SPOTIFY_CLIENT_SECRET!.trim();
-        const redirectUri = `${getAppBaseUrl()}/auth/spotify/callback`;
-
-        const tokenResp = await fetch('https://accounts.spotify.com/api/token', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-          },
-          body: new URLSearchParams({
-            grant_type: 'authorization_code',
-            code,
-            redirect_uri: redirectUri,
-            code_verifier: pending.codeVerifier,
-          }),
-        });
-
-        if (!tokenResp.ok) {
-          const errBody = await tokenResp.text();
-          throw new Error(`Spotify token exchange failed: ${errBody}`);
-        }
-
-        const tokenJson = (await tokenResp.json()) as {
-          access_token: string;
-          refresh_token?: string;
-          expires_in: number;
-        };
-
-        const meResp = await fetch('https://api.spotify.com/v1/me', {
-          headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-        });
-
-        const meJson = meResp.ok
-          ? ((await meResp.json()) as { id?: string; display_name?: string; product?: string })
-          : { id: 'spotify_user', display_name: 'Spotify Listener', product: 'free' };
-
-        const sid = crypto.randomBytes(24).toString('hex');
-        spotifySessions.set(sid, {
-          ownerUid: pending.ownerUid,
-          accessToken: tokenJson.access_token,
-          refreshToken: tokenJson.refresh_token,
-          expiresAt: Date.now() + (tokenJson.expires_in - 60) * 1000,
-          user: {
-            id: meJson.id || 'spotify_user',
-            displayName: meJson.display_name || 'Spotify User',
-            product: meJson.product || 'free',
-          },
-        });
-
-        res.cookie('mh_spotify_sid', sid, {
-          httpOnly: true,
-          secure: true,
-          sameSite: 'none',
-          maxAge: 24 * 3600 * 1000,
-        });
-
-        res.send(`
-          <html>
-            <body style="font-family:sans-serif;background:#090D1A;color:#fff;padding:32px;">
-              <p>Spotify connected successfully. Closing window...</p>
-              <script>
-                if (window.opener) {
-                  window.opener.postMessage({ type: 'SPOTIFY_OAUTH_SUCCESS' }, '*');
-                  window.close();
-                } else {
-                  window.location.href = '/';
-                }
-              </script>
-            </body>
-          </html>
-        `);
-      } catch (err) {
-        res.status(500).send(`
-          <html>
-            <body style="font-family:sans-serif;background:#090D1A;color:#fff;padding:32px;">
-              <h2>Spotify Connection Failed</h2>
-              <p>${err instanceof Error ? err.message : 'Unknown error'}</p>
-            </body>
-          </html>
-        `);
-      }
-    },
-  );
-
-  app.post('/api/spotify/disconnect', async (req: Request, res: Response) => {
-    const authUser = await verifyFirebaseAuth(req);
-    const sid = req.cookies?.mh_spotify_sid as string | undefined;
-    if (sid && authUser) {
-      const session = spotifySessions.get(sid);
-      if (session && session.ownerUid === authUser.uid) {
-        spotifySessions.delete(sid);
-      }
-    }
-    res.clearCookie('mh_spotify_sid', { secure: true, sameSite: 'none' });
-    res.json({ ok: true });
-  });
-
-  // Official Spotify Playlist Metadata API (uses App Client Credentials for public, Host OAuth for private)
-  app.post('/api/spotify/playlist', async (req: Request, res: Response) => {
-    try {
-      const authUser = await verifyFirebaseAuth(req);
-      if (!authUser) {
-        res.status(401).json({ error: 'Authentication required to load playlist.' });
-        return;
-      }
-
-      const { playlistUrl, roomCode } = req.body as {
-        playlistUrl?: string;
-        roomCode?: string;
-      };
-
-      if (roomCode) {
-        const isHost = await verifyRoomHostOwnership(roomCode, authUser.uid, authUser.idToken);
-        if (!isHost) {
-          res.status(403).json({ error: 'Only the room host can update the playlist.' });
-          return;
-        }
-      }
-
-      const configured = Boolean(
-        process.env.SPOTIFY_CLIENT_ID?.trim() && process.env.SPOTIFY_CLIENT_SECRET?.trim(),
-      );
-      if (!configured) {
-        res.status(503).json({
-          error:
-            'Spotify playlist import is not enabled on this server. Please use a YouTube playlist instead.',
-        });
-        return;
-      }
-
-      if (!playlistUrl || typeof playlistUrl !== 'string') {
-        res.status(400).json({ error: 'Please provide a Spotify playlist URL.' });
-        return;
-      }
-
-      const playlistId = extractSpotifyPlaylistId(playlistUrl);
-      if (!playlistId) {
-        res.status(400).json({
-          error:
-            'Invalid Spotify playlist URL. Expected a link like https://open.spotify.com/playlist/...',
-        });
-        return;
-      }
-
-      const hostSession = await getHostSpotifySession(req, authUser.uid);
-      const accessToken = hostSession
-        ? hostSession.accessToken
-        : await getSpotifyAppAccessToken();
-
-      if (!accessToken) {
-        res.status(502).json({
-          error: 'Could not authorize with Spotify right now. Please try again or use YouTube.',
-        });
-        return;
-      }
-
-      const plResp = await fetch(
-        `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}?fields=name,public,tracks.total,tracks.next,tracks.items(is_local,track(id,name,preview_url,artists(name),album(images)))`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        },
-      );
-
-      if (!plResp.ok) {
-        if (plResp.status === 401 || plResp.status === 403 || plResp.status === 404) {
-          if (!hostSession) {
-            res.status(403).json({
-              requiresSpotifyAuth: true,
-              error:
-                'This Spotify playlist is private or restricted. Connect your Spotify account to load your private playlists, or use a public playlist / YouTube.',
-            });
-            return;
-          }
-          res.status(plResp.status).json({
-            error:
-              'Spotify restricted access to this playlist. Note: Spotify Web API restricts algorithmic/editorial Spotify-owned playlists, and private playlists require permission from the playlist owner. Please try a user-created playlist or switch to YouTube.',
-          });
-          return;
-        }
-        const errText = await plResp.text();
-        res.status(plResp.status).json({ error: `Spotify API error: ${errText}` });
-        return;
-      }
-
-      interface SpotifyTrackEntry {
-        is_local?: boolean;
-        track?: {
-          id?: string;
-          name?: string;
-          preview_url?: string | null;
-          artists?: Array<{ name?: string }>;
-          album?: { images?: Array<{ url?: string }> };
-        } | null;
-      }
-
-      const plJson = (await plResp.json()) as {
-        name?: string;
-        tracks?: {
-          total?: number;
-          next?: string | null;
-          items?: SpotifyTrackEntry[];
-        };
-      };
-
-      const allEntries: SpotifyTrackEntry[] = [...(plJson.tracks?.items || [])];
-      let nextUrl = plJson.tracks?.next || null;
-      let pageGuard = 0;
-
-      while (nextUrl && pageGuard < 2 && allEntries.length < 200) {
-        pageGuard++;
-        const nextResp = await fetch(nextUrl, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (!nextResp.ok) break;
-        const nextJson = (await nextResp.json()) as {
-          next?: string | null;
-          items?: SpotifyTrackEntry[];
-        };
-        allEntries.push(...(nextJson.items || []));
-        nextUrl = nextJson.next || null;
-      }
-
-      const seen = new Set<string>();
-      const tracks: TrackItem[] = [];
-      for (const entry of allEntries) {
-        if (entry.is_local || !entry.track?.id || !entry.track?.name) continue;
-        if (seen.has(entry.track.id)) continue;
-        seen.add(entry.track.id);
-        tracks.push({
-          id: `sp_${entry.track.id}`,
-          title: entry.track.name,
-          artist: (entry.track.artists || []).map((a) => a.name).filter(Boolean).join(', ') || 'Spotify',
-          sourceId: entry.track.id,
-          sourceType: 'spotify',
-          thumbnailUrl: entry.track.album?.images?.[0]?.url,
-          previewUrl: entry.track.preview_url || undefined,
-        });
-      }
-
-      const limitationWarning = hostSession && hostSession.user.product !== 'premium'
-        ? 'Your Spotify account is on the Free tier. Spotify Embed Player may play 30-second previews or require signing into open.spotify.com in this browser. YouTube playlists play full tracks without a subscription.'
-        : 'Spotify Embed Player is subject to browser autoplay and Spotify session rules. If a track only plays a 30s preview in the embed, ensure you are signed into open.spotify.com in this browser or switch to YouTube.';
-
-      res.json({
-        ok: true,
-        sourceType: 'spotify',
-        playlistId,
-        playlistName: plJson.name || 'Spotify Playlist',
-        totalFound: tracks.length,
-        tracks,
-        limitationWarning,
-      });
-    } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load Spotify playlist.',
-      });
-    }
-  });
+  // Spotify integration removed by host preference; YouTube playlists only.
 
   // Server-side ticket generation
   app.post('/api/game/generate-tickets', (req: Request, res: Response) => {

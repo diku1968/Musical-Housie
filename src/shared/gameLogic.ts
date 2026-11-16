@@ -24,36 +24,90 @@ export function generateRoomCode(): string {
   return code;
 }
 
-export function extractYouTubePlaylistId(inputUrl: string): string | null {
-  try {
-    const trimmed = inputUrl.trim();
-    if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) {
-      return trimmed;
+function decodeRepeatedly(value: string): string {
+  let current = value;
+  for (let i = 0; i < 2; i++) {
+    try {
+      const next = decodeURIComponent(current);
+      if (next === current) break;
+      current = next;
+    } catch {
+      break;
     }
-    const url = new URL(trimmed);
-    const listParam = url.searchParams.get('list');
-    if (listParam && /^[a-zA-Z0-9_-]+$/.test(listParam)) {
-      return listParam;
-    }
-    return null;
-  } catch {
-    return null;
   }
+  return current;
 }
 
-export function extractSpotifyPlaylistId(inputUrl: string): string | null {
-  try {
-    const trimmed = inputUrl.trim();
-    const uriMatch = trimmed.match(/^spotify:playlist:([a-zA-Z0-9]+)$/);
-    if (uriMatch) return uriMatch[1];
+export function extractFirstUrlFromInput(inputUrl: string): string | null {
+  const trimmed = inputUrl.trim();
+  if (!trimmed) return null;
 
-    const url = new URL(trimmed);
-    if (!url.hostname.includes('spotify.com')) return null;
-    const match = url.pathname.match(/\/playlist\/([a-zA-Z0-9]+)/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
+  const fullUrlMatch = trimmed.match(/https?:\/\/[^\s"'<>]+/i);
+  if (fullUrlMatch) {
+    return fullUrlMatch[0].replace(/[),.;!?]+$/, '');
   }
+
+  const schemelessMatch = trimmed.match(
+    /(?:(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be|yt\.be|youtube\.app\.goo\.gl|goo\.gl)\/[^\s"'<>]+)/i,
+  );
+  if (schemelessMatch) {
+    return `https://${schemelessMatch[0].replace(/[),.;!?]+$/, '')}`;
+  }
+
+  return null;
+}
+
+export function normalizeYouTubePlaylistUrl(playlistId: string): string {
+  return `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`;
+}
+
+export function extractYouTubePlaylistId(inputUrl: string, depth = 0): string | null {
+  if (depth > 2) return null;
+  const trimmed = inputUrl.trim();
+  if (!trimmed) return null;
+
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const candidateUrl = extractFirstUrlFromInput(trimmed) || trimmed;
+
+  try {
+    const withScheme = /^[a-zA-Z]+:\/\//.test(candidateUrl)
+      ? candidateUrl
+      : `https://${candidateUrl}`;
+    const url = new URL(withScheme);
+
+    // Unwrap Google redirect links sometimes produced by mobile browsers/apps
+    if (url.hostname.includes('google.') && url.searchParams.get('q')) {
+      const nested = extractYouTubePlaylistId(url.searchParams.get('q') || '', depth + 1);
+      if (nested) return nested;
+    }
+
+    const listParam = url.searchParams.get('list');
+    if (listParam && /^[a-zA-Z0-9_-]{2,}$/.test(listParam)) {
+      return listParam;
+    }
+
+    // Handle mobile redirect links containing nested continue/url parameters
+    for (const key of ['continue', 'url', 'u', 'next']) {
+      const nestedVal = url.searchParams.get(key);
+      if (nestedVal) {
+        const nested = extractYouTubePlaylistId(decodeRepeatedly(nestedVal), depth + 1);
+        if (nested) return nested;
+      }
+    }
+  } catch {
+    // Fall through to regex extraction
+  }
+
+  const decoded = decodeRepeatedly(trimmed);
+  const regexMatch = decoded.match(/(?:[?&#]|&amp;)list=([a-zA-Z0-9_-]{2,})/i);
+  if (regexMatch && regexMatch[1]) {
+    return regexMatch[1];
+  }
+
+  return null;
 }
 
 export function generateUniqueTickets(

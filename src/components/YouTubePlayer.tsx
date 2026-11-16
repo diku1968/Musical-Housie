@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { TrackItem } from '../shared/types.ts';
+import { ProblemTrackItem, TrackItem } from '../shared/types.ts';
 
 interface YTPlayerInstance {
   loadVideoById: (videoId: string) => void;
@@ -85,14 +85,19 @@ export function loadYouTubeIframeApi(): Promise<void> {
 export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promise<{
   tracks: TrackItem[];
   skippedRestricted: number;
+  problemTracks: ProblemTrackItem[];
 }> {
   await loadYouTubeIframeApi();
 
   const tempContainer = document.createElement('div');
   tempContainer.style.position = 'fixed';
-  tempContainer.style.left = '-9999px';
-  tempContainer.style.width = '320px';
-  tempContainer.style.height = '180px';
+  tempContainer.style.bottom = '0';
+  tempContainer.style.right = '0';
+  tempContainer.style.width = '200px';
+  tempContainer.style.height = '120px';
+  tempContainer.style.opacity = '0.01';
+  tempContainer.style.pointerEvents = 'none';
+  tempContainer.style.zIndex = '-1';
   document.body.appendChild(tempContainer);
 
   const playerMount = document.createElement('div');
@@ -100,6 +105,7 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
 
   let player: YTPlayerInstance | null = null;
   let pollTimer: number | undefined;
+  let cueFallbackTimer: number | undefined;
   try {
     const videoIds = await new Promise<string[]>((resolve, reject) => {
       let settled = false;
@@ -107,30 +113,42 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
         if (!settled) {
           settled = true;
           if (pollTimer !== undefined) window.clearInterval(pollTimer);
+          if (cueFallbackTimer !== undefined) window.clearTimeout(cueFallbackTimer);
           reject(
             new Error(
               'Timed out loading YouTube playlist. Ensure the playlist is Public or Unlisted.',
             ),
           );
         }
-      }, 12000);
+      }, 14000);
 
       player = new window.YT!.Player(playerMount, {
-        height: '180',
-        width: '320',
+        height: '120',
+        width: '200',
         playerVars: {
           listType: 'playlist',
           list: playlistId,
           autoplay: 0,
+          playsinline: 1,
+          origin: window.location.origin,
         },
         events: {
           onReady: (event) => {
-            event.target.cuePlaylist({ listType: 'playlist', list: playlistId });
+            cueFallbackTimer = window.setTimeout(() => {
+              if (!settled) {
+                try {
+                  event.target.cuePlaylist({ listType: 'playlist', list: playlistId });
+                } catch {
+                  // Ignore cue retry error
+                }
+              }
+            }, 1800);
             pollTimer = window.setInterval(() => {
               const list = event.target.getPlaylist();
               if (Array.isArray(list) && list.length > 0 && !settled) {
                 settled = true;
                 if (pollTimer !== undefined) window.clearInterval(pollTimer);
+                if (cueFallbackTimer !== undefined) window.clearTimeout(cueFallbackTimer);
                 window.clearTimeout(timeout);
                 resolve(list);
               }
@@ -140,6 +158,7 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
             if (!settled) {
               settled = true;
               if (pollTimer !== undefined) window.clearInterval(pollTimer);
+              if (cueFallbackTimer !== undefined) window.clearTimeout(cueFallbackTimer);
               window.clearTimeout(timeout);
               reject(
                 new Error(
@@ -160,6 +179,7 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
     const json = (await resp.json()) as {
       tracks?: TrackItem[];
       skippedRestricted?: number;
+      problemTracks?: ProblemTrackItem[];
       error?: string;
     };
     if (!resp.ok || !json.tracks) {
@@ -168,6 +188,7 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
     return {
       tracks: json.tracks,
       skippedRestricted: json.skippedRestricted || 0,
+      problemTracks: json.problemTracks || [],
     };
   } finally {
     if (pollTimer !== undefined) window.clearInterval(pollTimer);
@@ -194,7 +215,7 @@ interface YouTubePlayerProps {
   clipDurationSeconds?: number | null;
   onTrackEnded?: () => void;
   onAutoStop?: () => void;
-  onPlaybackError?: (message: string) => void;
+  onPlaybackError?: (message: string, errorCode?: number) => void;
   onStateSync?: (playing: boolean) => void;
   onPlaybackProgress?: (info: PlaybackProgressInfo) => void;
   caption?: string;
@@ -294,9 +315,11 @@ export function YouTubePlayer({
             const code = event.data;
             const msg =
               code === 101 || code === 150
-                ? 'The uploader restricted embedding for this video. Click NEXT SONG to continue.'
-                : 'YouTube player could not play this track. Click NEXT SONG to continue.';
-            callbacksRef.current.onPlaybackError?.(msg);
+                ? 'Embedding disabled by uploader/copyright owner (Error 101/150).'
+                : code === 100
+                  ? 'Video was removed or set to private on YouTube (Error 100).'
+                  : `YouTube player could not play this video (Error ${code}).`;
+            callbacksRef.current.onPlaybackError?.(msg, code);
           },
         },
       });

@@ -12,7 +12,13 @@ import {
   signInAnonymously,
   signInWithPopup,
 } from 'firebase/auth';
-import { Firestore, doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import {
+  Firestore,
+  doc,
+  getDocFromServer,
+  getFirestore,
+  initializeFirestore,
+} from 'firebase/firestore';
 import rawConfig from '../../firebase-applet-config.json';
 
 interface FirebaseAppletConfig {
@@ -44,9 +50,16 @@ let authInstance: Auth | null = null;
 
 if (isFirebaseConfigured) {
   app = initializeApp(firebaseConfig);
-  dbInstance = firebaseConfig.firestoreDatabaseId
-    ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-    : getFirestore(app);
+  const databaseId = firebaseConfig.firestoreDatabaseId || undefined;
+  try {
+    // Auto-detect long-polling prevents Firestore WebChannel from hanging on iOS Safari,
+    // iCloud Private Relay, cellular networks, and in-app browsers (WhatsApp/Camera).
+    dbInstance = databaseId
+      ? initializeFirestore(app, { experimentalAutoDetectLongPolling: true }, databaseId)
+      : initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+  } catch {
+    dbInstance = databaseId ? getFirestore(app, databaseId) : getFirestore(app);
+  }
 
   // Avoid indexedDBLocalPersistence which frequently stalls or fails on iOS Safari / WebKit
   // (especially from QR camera links, in-app browsers, or private browsing).
@@ -55,7 +68,13 @@ if (isFirebaseConfigured) {
       persistence: [browserLocalPersistence, inMemoryPersistence],
     });
   } catch {
-    authInstance = getAuth(app);
+    try {
+      authInstance = initializeAuth(app, {
+        persistence: inMemoryPersistence,
+      });
+    } catch {
+      authInstance = getAuth(app);
+    }
   }
 }
 
@@ -115,19 +134,46 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+function raceWithTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.finally(() => {
+      if (timer) clearTimeout(timer);
+    }),
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    }),
+  ]);
+}
+
 export async function testFirestoreConnection(): Promise<{ ok: boolean; error?: string }> {
   if (!isFirebaseConfigured || !dbInstance) {
     return { ok: false, error: 'Firebase configuration is missing.' };
   }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return {
+      ok: false,
+      error: 'You appear to be offline. Please check your internet connection and tap Retry.',
+    };
+  }
   try {
-    await getDocFromServer(doc(dbInstance, 'test', 'connection'));
+    await raceWithTimeout(
+      getDocFromServer(doc(dbInstance, 'test', 'connection')),
+      4500,
+      'FIRESTORE_CHECK_TIMEOUT',
+    );
     return { ok: true };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+    if (msg === 'FIRESTORE_CHECK_TIMEOUT') {
+      // Do not permanently block boot on iOS Safari if initial WebChannel handshake is slow;
+      // allow the UI to load so auth & room actions can complete over long-polling.
+      return { ok: true };
+    }
     if (msg.includes('the client is offline')) {
       return {
         ok: false,
-        error: 'Unable to reach Firestore. Please check your internet connection and Firebase config.',
+        error: 'Unable to reach Firestore. Please check your internet connection and try again.',
       };
     }
     // permission-denied on test/connection confirms live server reachability
@@ -192,7 +238,11 @@ async function runEnsureAnonymousAuth(): Promise<AuthEnsureResult> {
   }
 
   try {
-    const cred = await signInAnonymously(authInstance);
+    const cred = await raceWithTimeout(
+      signInAnonymously(authInstance),
+      7000,
+      'Session startup timed out on first attempt.',
+    );
     if (cred.user) {
       return { user: cred.user, needsAnonymousAuthSetup: false };
     }
@@ -204,13 +254,26 @@ async function runEnsureAnonymousAuth(): Promise<AuthEnsureResult> {
         error: 'Anonymous Authentication is not enabled in your Firebase Console yet.',
       };
     }
-    // Fall through to inMemoryPersistence retry below
+    // Fall through to inMemoryPersistence retry below (handles blocked storage on iOS Safari)
   }
 
   // Fallback for iOS Safari / restricted browsers where persistent storage fails or stalls
   try {
-    await setPersistence(authInstance, inMemoryPersistence);
-    const retryCred = await signInAnonymously(authInstance);
+    await raceWithTimeout(
+      setPersistence(authInstance, inMemoryPersistence),
+      2500,
+      'Persistence switch timed out.',
+    );
+  } catch {
+    // Continue even if setPersistence throws
+  }
+
+  try {
+    const retryCred = await raceWithTimeout(
+      signInAnonymously(authInstance),
+      7000,
+      'Authentication timed out. On iPhone, please open this link directly in Safari and check your internet connection.',
+    );
     if (retryCred.user) {
       return { user: retryCred.user, needsAnonymousAuthSetup: false };
     }

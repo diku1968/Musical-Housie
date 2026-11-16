@@ -21,7 +21,7 @@ const STEPS = [
   {
     num: '03',
     title: 'Host selects a playlist',
-    detail: 'Paste a public YouTube or Spotify playlist URL with at least 15 accessible songs.',
+    detail: 'Paste a public or unlisted YouTube playlist URL (mobile or desktop link) with at least 15 accessible songs.',
   },
   {
     num: '04',

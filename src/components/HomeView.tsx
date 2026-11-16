@@ -52,7 +52,7 @@ export function HomeView({
                 Musical Housie
               </h1>
               <p className="text-base sm:text-lg text-slate-300 leading-relaxed max-w-xl">
-                Pick a YouTube or Spotify playlist, share a 6-character code, and play live music bingo with friends &amp; family. No accounts or downloads required.
+                Pick a YouTube playlist, share a 6-character code, and play live music bingo with friends &amp; family. No accounts or downloads required.
               </p>
             </div>
 
@@ -166,7 +166,7 @@ export function HomeView({
             <p className="text-xs font-semibold text-indigo-300">02. Listen &amp; Mark</p>
             <h2 className="font-display text-lg font-bold text-white">Secret Song Guessing</h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              The host plays tracks from YouTube or Spotify while song titles stay hidden until you identify and tap them on your 3x5 ticket.
+              The host plays tracks from YouTube while song titles stay hidden until you identify and tap them on your 3x5 ticket.
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-[#11172E] p-5 space-y-2">

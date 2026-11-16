@@ -19,6 +19,14 @@ export interface TrackItem {
   previewUrl?: string;
 }
 
+export interface ProblemTrackItem {
+  position?: number;
+  sourceId: string;
+  title: string;
+  artist?: string;
+  reason: string;
+}
+
 export interface TicketCell {
   id: string;
   title: string;

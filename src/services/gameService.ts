@@ -388,6 +388,12 @@ export async function joinGameRoom(
   try {
     roomSnap = await getDoc(roomRef);
   } catch (err) {
+    const rawMsg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    if (rawMsg.includes('offline') || rawMsg.includes('unavailable') || rawMsg.includes('network')) {
+      throw new Error(
+        'Cannot reach the game server right now. Check your internet connection, tap Retry, or open this page directly in Safari.',
+      );
+    }
     handleFirestoreError(err, OperationType.GET, `rooms/${roomCode}`);
   }
 
