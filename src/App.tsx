@@ -40,6 +40,18 @@ const JoinRoomView = lazy(() =>
 const HowToPlayView = lazy(() =>
   import('./components/HowToPlayView.tsx').then((m) => ({ default: m.HowToPlayView })),
 );
+const AboutView = lazy(() =>
+  import('./components/AboutView.tsx').then((m) => ({ default: m.AboutView })),
+);
+const ContactView = lazy(() =>
+  import('./components/ContactView.tsx').then((m) => ({ default: m.ContactView })),
+);
+const PrivacyPolicyView = lazy(() =>
+  import('./components/PrivacyPolicyView.tsx').then((m) => ({ default: m.PrivacyPolicyView })),
+);
+const TermsView = lazy(() =>
+  import('./components/TermsView.tsx').then((m) => ({ default: m.TermsView })),
+);
 const HostGameView = lazy(() =>
   import('./components/HostGameView.tsx').then((m) => ({ default: m.HostGameView })),
 );
@@ -60,19 +72,126 @@ interface AppHistoryState {
 const VALID_STATIC_SCREENS: ReadonlySet<AppScreen> = new Set([
   'home',
   'how-to-play',
+  'about',
+  'contact',
+  'privacy-policy',
+  'terms',
   'host-create',
   'join',
 ]);
 
+const PATH_TO_SCREEN: Record<string, AppScreen> = {
+  '/': 'home',
+  '/how-to-play': 'how-to-play',
+  '/about': 'about',
+  '/contact': 'contact',
+  '/privacy-policy': 'privacy-policy',
+  '/terms': 'terms',
+  '/host-create': 'host-create',
+  '/join': 'join',
+};
+
+const SCREEN_TO_PATH: Record<AppScreen, string> = {
+  home: '/',
+  'how-to-play': '/how-to-play',
+  about: '/about',
+  contact: '/contact',
+  'privacy-policy': '/privacy-policy',
+  terms: '/terms',
+  'host-create': '/host-create',
+  join: '/join',
+  'host-room': '/host-room',
+  'player-room': '/player-room',
+};
+
+const PAGE_METADATA: Record<AppScreen, { title: string; description: string; canonicalPath: string }> = {
+  home: {
+    title: 'Dhiren Pathak Present Musical Housie — Real-Time Multiplayer Music Bingo',
+    description:
+      'Host and play real-time multiplayer Musical Housie with friends and family using YouTube playlists, unique 3x5 tickets, and live pattern verification.',
+    canonicalPath: '/',
+  },
+  'how-to-play': {
+    title: 'How to Play — Dhiren Pathak Present Musical Housie',
+    description:
+      'Step-by-step guide to hosting a room, loading YouTube playlists, marking 3x5 Musical Housie tickets, and verifying winning patterns.',
+    canonicalPath: '/how-to-play',
+  },
+  about: {
+    title: 'About Us — Dhiren Pathak Present Musical Housie',
+    description:
+      'Learn about Dhiren Pathak Present Musical Housie, a free multiplayer music bingo web experience powered by YouTube playlists.',
+    canonicalPath: '/about',
+  },
+  contact: {
+    title: 'Contact Us — Dhiren Pathak Present Musical Housie',
+    description:
+      'Contact the Dhiren Pathak Present Musical Housie team for gameplay support, technical questions, privacy inquiries, or feedback.',
+    canonicalPath: '/contact',
+  },
+  'privacy-policy': {
+    title: 'Privacy Policy — Dhiren Pathak Present Musical Housie',
+    description:
+      'Privacy Policy detailing session storage, Firebase anonymous authentication, YouTube embedded playback, and Google AdSense cookies on Musical Housie.',
+    canonicalPath: '/privacy-policy',
+  },
+  terms: {
+    title: 'Terms and Conditions — Dhiren Pathak Present Musical Housie',
+    description:
+      'Terms and Conditions governing fair play, casual entertainment use, and YouTube playlist playback on Dhiren Pathak Present Musical Housie.',
+    canonicalPath: '/terms',
+  },
+  'host-create': {
+    title: 'Host a Game — Dhiren Pathak Present Musical Housie',
+    description: 'Create a 6-character Musical Housie room and invite friends and family to play.',
+    canonicalPath: '/host-create',
+  },
+  join: {
+    title: 'Join a Game — Dhiren Pathak Present Musical Housie',
+    description: 'Enter a 6-character room code to join a live Musical Housie multiplayer room.',
+    canonicalPath: '/join',
+  },
+  'host-room': {
+    title: 'Host Dashboard — Dhiren Pathak Present Musical Housie',
+    description: 'Live host room for managing Musical Housie playlists, songs, and winner verification.',
+    canonicalPath: '/',
+  },
+  'player-room': {
+    title: 'Live Ticket Room — Dhiren Pathak Present Musical Housie',
+    description: 'Live player ticket and song matching view for Musical Housie.',
+    canonicalPath: '/',
+  },
+};
+
+function resolveInitialRoute(): { screen: AppScreen; inviteRoomCode: string } {
+  if (typeof window === 'undefined') {
+    return { screen: 'home', inviteRoomCode: '' };
+  }
+  const params = new URLSearchParams(window.location.search);
+  const roomParam = params.get('room')?.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (roomParam && /^[A-Z0-9]{6}$/.test(roomParam)) {
+    return { screen: 'join', inviteRoomCode: roomParam };
+  }
+
+  const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  const pathScreen = PATH_TO_SCREEN[normalizedPath];
+  if (pathScreen && VALID_STATIC_SCREENS.has(pathScreen)) {
+    return { screen: pathScreen, inviteRoomCode: '' };
+  }
+
+  const screenParam = params.get('screen') as AppScreen | null;
+  if (screenParam && VALID_STATIC_SCREENS.has(screenParam)) {
+    return { screen: screenParam, inviteRoomCode: '' };
+  }
+
+  return { screen: 'home', inviteRoomCode: '' };
+}
+
 function buildUrlForHistoryState(state: AppHistoryState): string {
-  const base = window.location.pathname || '/';
   if (state.screen === 'join' && state.inviteRoomCode && /^[A-Z0-9]{6}$/.test(state.inviteRoomCode)) {
-    return `${base}?room=${state.inviteRoomCode}`;
+    return `/?room=${state.inviteRoomCode}`;
   }
-  if (state.screen === 'home') {
-    return base;
-  }
-  return `${base}?screen=${state.screen}`;
+  return SCREEN_TO_PATH[state.screen] || '/';
 }
 
 interface ErrorBoundaryState {
@@ -135,11 +254,12 @@ function ScreenSuspenseFallback() {
 }
 
 function MusicalHousieApp() {
-  const [screen, setScreen] = useState<AppScreen>('home');
+  const initialRouteRef = useRef(resolveInitialRoute());
+  const [screen, setScreen] = useState<AppScreen>(initialRouteRef.current.screen);
   const [activeRoomCode, setActiveRoomCode] = useState<string>('');
-  const [inviteRoomCode, setInviteRoomCode] = useState<string>('');
+  const [inviteRoomCode, setInviteRoomCode] = useState<string>(initialRouteRef.current.inviteRoomCode);
   const [uid, setUid] = useState<string>('');
-  const [savedSession, setSavedSession] = useState<SavedSession | null>(null);
+  const [savedSession, setSavedSession] = useState<SavedSession | null>(() => loadLocalSession());
 
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState('');
@@ -169,13 +289,36 @@ function MusicalHousieApp() {
   inviteRoomCodeRef.current = inviteRoomCode;
   setupModalOpenRef.current = setupModalOpen;
 
+  // Keep page <title>, meta description, and canonical link synced per view
+  useEffect(() => {
+    const meta = PAGE_METADATA[screen] || PAGE_METADATA.home;
+    document.title = meta.title;
+
+    const descEl = document.querySelector('meta[name="description"]');
+    if (descEl) {
+      descEl.setAttribute('content', meta.description);
+    }
+
+    const canonicalEl = document.querySelector('link[rel="canonical"]');
+    if (canonicalEl) {
+      const origin =
+        window.location.hostname === 'musical-housie.ai.studio'
+          ? 'https://musical-housie.ai.studio'
+          : window.location.origin;
+      canonicalEl.setAttribute('href', `${origin}${meta.canonicalPath}`);
+    }
+  }, [screen]);
+
   const navigateTo = useCallback(
     (
       target: AppScreen,
       options?: { roomCode?: string; inviteCode?: string; replace?: boolean },
     ) => {
-      const nextRoomCode = options?.roomCode ?? (target === 'host-room' || target === 'player-room' ? activeRoomCodeRef.current : '');
-      const nextInviteCode = options?.inviteCode ?? (target === 'join' ? inviteRoomCodeRef.current : '');
+      const nextRoomCode =
+        options?.roomCode ??
+        (target === 'host-room' || target === 'player-room' ? activeRoomCodeRef.current : '');
+      const nextInviteCode =
+        options?.inviteCode ?? (target === 'join' ? inviteRoomCodeRef.current : '');
 
       const currentState = (window.history.state || {}) as Partial<AppHistoryState>;
       const sameTarget =
@@ -209,6 +352,7 @@ function MusicalHousieApp() {
         setInviteRoomCode(options.inviteCode);
       }
       setScreen(target);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     },
     [],
   );
@@ -301,33 +445,16 @@ function MusicalHousieApp() {
     }
   }, []);
 
-  // Initial URL/deep-link + history state setup & Firebase boot
+  // Sync initial history entry and start background Firebase initialization
   useEffect(() => {
+    const initial = initialRouteRef.current;
+    const initialState: AppHistoryState = {
+      screen: initial.screen,
+      ...(initial.inviteRoomCode ? { inviteRoomCode: initial.inviteRoomCode } : {}),
+    };
+    window.history.replaceState(initialState, '', buildUrlForHistoryState(initialState));
+
     initializeBackend();
-
-    const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get('room')?.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const screenParam = params.get('screen') as AppScreen | null;
-
-    if (roomParam && /^[A-Z0-9]{6}$/.test(roomParam)) {
-      const initialState: AppHistoryState = {
-        screen: 'join',
-        inviteRoomCode: roomParam,
-      };
-      setInviteRoomCode(roomParam);
-      setScreen('join');
-      window.history.replaceState(initialState, '', window.location.href);
-    } else if (screenParam && VALID_STATIC_SCREENS.has(screenParam) && screenParam !== 'home') {
-      const initialState: AppHistoryState = { screen: screenParam };
-      setSavedSession(loadLocalSession());
-      setScreen(screenParam);
-      window.history.replaceState(initialState, '', window.location.href);
-    } else {
-      const initialState: AppHistoryState = { screen: 'home' };
-      setSavedSession(loadLocalSession());
-      setScreen('home');
-      window.history.replaceState(initialState, '', window.location.pathname || '/');
-    }
 
     if (!auth) return;
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
@@ -341,7 +468,6 @@ function MusicalHousieApp() {
     const handlePopState = (event: PopStateEvent) => {
       const state = (event.state || null) as AppHistoryState | null;
 
-      // If Setup modal is currently open and popped state no longer has modal: 'setup', close modal only
       if (setupModalOpenRef.current && state?.modal !== 'setup') {
         setSetupModalOpen(false);
         if (!state || state.screen === screenRef.current) {
@@ -350,9 +476,10 @@ function MusicalHousieApp() {
       }
 
       if (!state) {
-        if (screenRef.current !== 'home') {
+        const resolved = resolveInitialRoute();
+        if (screenRef.current !== resolved.screen) {
           setSavedSession(loadLocalSession());
-          setScreen('home');
+          setScreen(resolved.screen);
         }
         return;
       }
@@ -368,7 +495,7 @@ function MusicalHousieApp() {
         } else {
           setSavedSession(loadLocalSession());
           setScreen('home');
-          window.history.replaceState({ screen: 'home' } satisfies AppHistoryState, '', window.location.pathname || '/');
+          window.history.replaceState({ screen: 'home' } satisfies AppHistoryState, '', '/');
         }
         return;
       }
@@ -498,6 +625,8 @@ function MusicalHousieApp() {
   };
 
   const inActiveRoom = screen === 'host-room' || screen === 'player-room';
+  const isInteractiveGameFlow =
+    inActiveRoom || screen === 'host-create' || screen === 'join';
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-[#080B18] via-[#0B1024] to-[#120F29] text-slate-100">
@@ -509,7 +638,7 @@ function MusicalHousieApp() {
         onLeaveRoom={handleLeaveRoom}
       />
 
-      {/* Centralized non-overlapping connectivity status bar (never covers tickets, player, or buttons) */}
+      {/* Centralized non-overlapping connectivity status bar */}
       {(isOffline || reconnecting || connectionVerifiedNotice) && (
         <div className="mx-auto mt-3 max-w-5xl px-4 sm:px-6 w-full">
           {isOffline ? (
@@ -553,8 +682,8 @@ function MusicalHousieApp() {
         </div>
       )}
 
-      {/* Configuration / Setup Banners */}
-      {!isFirebaseConfigured && (
+      {/* Configuration / Setup Banners shown only when user accesses game creation / room flows */}
+      {isInteractiveGameFlow && !isFirebaseConfigured && (
         <div className="mx-auto mt-6 max-w-3xl px-4 w-full">
           <div className="rounded-2xl border border-rose-400/40 bg-rose-500/15 p-5 space-y-2">
             <div className="flex items-center gap-2 text-rose-200 font-bold">
@@ -575,7 +704,7 @@ function MusicalHousieApp() {
         </div>
       )}
 
-      {needsAnonymousAuthSetup && (
+      {isInteractiveGameFlow && needsAnonymousAuthSetup && (
         <div className="mx-auto mt-6 max-w-4xl px-4 w-full">
           <div className="rounded-2xl border border-amber-400/40 bg-amber-400/10 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1">
@@ -609,7 +738,7 @@ function MusicalHousieApp() {
         </div>
       )}
 
-      {bootError && isFirebaseConfigured && !isOffline && (
+      {isInteractiveGameFlow && bootError && isFirebaseConfigured && !isOffline && (
         <div className="mx-auto mt-6 max-w-3xl px-4 w-full">
           <div className="rounded-2xl border border-rose-400/40 bg-rose-500/15 px-4 py-3 text-sm text-rose-200 flex items-center justify-between gap-3">
             <span>{bootError}</span>
@@ -624,8 +753,9 @@ function MusicalHousieApp() {
         </div>
       )}
 
+      {/* Render Home & all public/informational pages immediately without blocking behind Firebase boot */}
       <div className="flex-1">
-        {booting ? (
+        {inActiveRoom && booting ? (
           <div className="mx-auto max-w-3xl px-4 py-24 flex items-center justify-center gap-3 text-slate-300">
             <Loader2 className="h-5 w-5 animate-spin text-amber-400" />
             <span>Connecting to Dhiren Pathak Present Musical Housie...</span>
@@ -665,6 +795,26 @@ function MusicalHousieApp() {
               />
             )}
 
+            {screen === 'about' && (
+              <AboutView
+                onBack={() => navigateTo('home')}
+                onHostClick={() => navigateTo('host-create')}
+                onJoinClick={() => navigateTo('join')}
+              />
+            )}
+
+            {screen === 'contact' && (
+              <ContactView onBack={() => navigateTo('home')} />
+            )}
+
+            {screen === 'privacy-policy' && (
+              <PrivacyPolicyView onBack={() => navigateTo('home')} />
+            )}
+
+            {screen === 'terms' && (
+              <TermsView onBack={() => navigateTo('home')} />
+            )}
+
             {screen === 'host-room' && activeRoomCode && uid && (
               <HostGameView
                 roomCode={activeRoomCode}
@@ -687,16 +837,69 @@ function MusicalHousieApp() {
 
       {!inActiveRoom && (
         <footer className="border-t border-white/10 py-6 px-4 sm:px-6 text-xs text-slate-400">
-          <div className="mx-auto max-w-6xl flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="mx-auto max-w-6xl flex flex-col md:flex-row items-center justify-between gap-4">
             <span>Dhiren Pathak Present Musical Housie · Casual multiplayer music bingo</span>
-            <div className="flex items-center gap-5">
-              <button
-                type="button"
-                onClick={() => navigateTo('how-to-play')}
-                className="hover:text-white transition-colors cursor-pointer"
+            <nav aria-label="Footer navigation" className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+              <a
+                href="/"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('home');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                Home
+              </a>
+              <a
+                href="/how-to-play"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('how-to-play');
+                }}
+                className="hover:text-white transition-colors"
               >
                 How to Play
-              </button>
+              </a>
+              <a
+                href="/about"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('about');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                About Us
+              </a>
+              <a
+                href="/contact"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('contact');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                Contact Us
+              </a>
+              <a
+                href="/privacy-policy"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('privacy-policy');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                Privacy Policy
+              </a>
+              <a
+                href="/terms"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('terms');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                Terms &amp; Conditions
+              </a>
               <button
                 type="button"
                 onClick={openSetupModal}
@@ -704,7 +907,7 @@ function MusicalHousieApp() {
               >
                 Setup Guide
               </button>
-            </div>
+            </nav>
           </div>
         </footer>
       )}

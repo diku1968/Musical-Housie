@@ -924,9 +924,51 @@ async function startServer() {
 
   // Serve Vite in dev or built static dist in production
   const distPath = path.resolve(__dirname, 'dist');
+  const publicPath = path.resolve(__dirname, 'public');
   const isProd =
     process.env.NODE_ENV === 'production' ||
     (process.env.npm_lifecycle_event === 'start' && fs.existsSync(distPath));
+
+  const resolveStaticCrawlerFile = (filename: string): string | null => {
+    const candidates = isProd
+      ? [path.join(distPath, filename), path.join(publicPath, filename)]
+      : [path.join(publicPath, filename), path.join(distPath, filename)];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  };
+
+  app.get('/ads.txt', (_req: Request, res: Response) => {
+    const filePath = resolveStaticCrawlerFile('ads.txt');
+    if (!filePath) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.sendFile(filePath);
+  });
+
+  app.get('/robots.txt', (_req: Request, res: Response) => {
+    const filePath = resolveStaticCrawlerFile('robots.txt');
+    if (!filePath) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.sendFile(filePath);
+  });
+
+  app.get('/sitemap.xml', (_req: Request, res: Response) => {
+    const filePath = resolveStaticCrawlerFile('sitemap.xml');
+    if (!filePath) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.sendFile(filePath);
+  });
+
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
