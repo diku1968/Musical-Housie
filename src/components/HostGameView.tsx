@@ -13,6 +13,7 @@ import {
   MessageCircle,
   Pause,
   Play,
+  Printer,
   QrCode,
   Shuffle,
   SkipForward,
@@ -46,7 +47,11 @@ import {
   updateLobbySettings,
   verifyClaimOnServer,
 } from '../services/gameService.ts';
-import { formatTicketNumber, verifyClaimAgainstPlayedSongs } from '../shared/gameLogic.ts';
+import {
+  buildTrackSongNumberMap,
+  formatTicketNumber,
+  verifyClaimAgainstPlayedSongs,
+} from '../shared/gameLogic.ts';
 import {
   ALL_PATTERNS,
   ClaimVerificationResult,
@@ -62,6 +67,7 @@ import {
 import { GlobalBranding } from './GlobalBranding.tsx';
 import { MusicVisualizer } from './MusicVisualizer.tsx';
 import { PlaylistSelector } from './PlaylistSelector.tsx';
+import { SongTicketModal } from './SongTicketModal.tsx';
 import { WinningPatternsBoard } from './WinningPatternsBoard.tsx';
 import { PlaybackProgressInfo, YouTubePlayer } from './YouTubePlayer.tsx';
 
@@ -88,6 +94,8 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
   const qrContainerRef = useRef<HTMLDivElement | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [activePanel, setActivePanel] = useState<'claims' | 'players' | 'played'>('claims');
+  const [viewingTicketPlayerUid, setViewingTicketPlayerUid] = useState<string | null>(null);
+  const [autoPrintTicketModal, setAutoPrintTicketModal] = useState(false);
 
   const [verifications, setVerifications] = useState<Record<string, ClaimVerificationResult>>({});
   const [verifyingIds, setVerifyingIds] = useState<Record<string, boolean>>({});
@@ -254,16 +262,48 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
     prevWinnersCountRef.current = count;
   }, [winners.length]);
 
+  const trackSongNumberMap = useMemo(
+    () => buildTrackSongNumberMap(secret?.tracks || []),
+    [secret],
+  );
+
   const currentTrack = useMemo(() => {
     if (!secret || !secret.currentSongId) return null;
     return secret.tracks.find((t) => t.id === secret.currentSongId) || null;
   }, [secret]);
+
+  const currentTrackSongNumber = useMemo(() => {
+    if (!currentTrack) return undefined;
+    return trackSongNumberMap.get(currentTrack.id);
+  }, [currentTrack, trackSongNumberMap]);
+
+  const livePlayedSongIds = useMemo(() => {
+    const set = new Set<string>([
+      ...(secret?.playedSongIds || []),
+      ...(room?.playedSongIds || []),
+    ]);
+    return Array.from(set);
+  }, [secret, room]);
+
+  const livePlayedSongNumbers = useMemo(() => {
+    const set = new Set<number>(room?.playedSongNumbers || []);
+    for (const id of livePlayedSongIds) {
+      const n = trackSongNumberMap.get(id);
+      if (n !== undefined) set.add(n);
+    }
+    return Array.from(set);
+  }, [room, livePlayedSongIds, trackSongNumberMap]);
 
   const playedTracks = useMemo(() => {
     if (!secret) return [];
     const map = new Map(secret.tracks.map((t) => [t.id, t]));
     return secret.playedSongIds.map((id) => map.get(id)).filter(Boolean);
   }, [secret]);
+
+  const viewingTicketPlayer = useMemo(() => {
+    if (!viewingTicketPlayerUid) return null;
+    return players.find((p) => p.uid === viewingTicketPlayerUid) || null;
+  }, [players, viewingTicketPlayerUid]);
 
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const sharedOrigin = currentOrigin.replace('://ais-dev-', '://ais-pre-');
@@ -809,7 +849,14 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
               {/* Host-Only Current Song Display */}
               <div className="rounded-2xl border border-indigo-400/30 bg-[#090D1C] p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-                  <span>Current Song (Host Only)</span>
+                  <div className="flex items-center gap-2">
+                    <span>Current Song (Host Only)</span>
+                    {typeof currentTrackSongNumber === 'number' && (
+                      <span className="rounded-md border border-emerald-400/45 bg-emerald-500/15 px-2 py-0.5 font-mono text-[11px] font-bold text-emerald-200 tabular-nums">
+                        Song #{currentTrackSongNumber}
+                      </span>
+                    )}
+                  </div>
                   <span>
                     {room.currentSongRevealed ? 'Revealed to players' : 'Hidden from players'}
                   </span>
@@ -1271,45 +1318,96 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
 
               {activePanel === 'players' && (
                 <div className="divide-y divide-white/10 max-h-[540px] overflow-y-auto">
-                  {players.map((p) => (
-                    <div key={p.uid} className="py-3 flex items-center justify-between gap-2 text-sm">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Users className="h-4 w-4 text-indigo-300 shrink-0" />
-                        <span className="font-medium text-white truncate">{p.name}</span>
-                        {p.ticketNumber > 0 && (
-                          <span className="font-mono text-xs text-amber-300 shrink-0">
-                            {formatTicketNumber(p.ticketNumber)}
-                          </span>
+                  {players.map((p) => {
+                    const playedIdSet = new Set(livePlayedSongIds);
+                    const playedNumSet = new Set(livePlayedSongNumbers);
+                    const liveMatchedCount = p.ticket.filter(
+                      (cell) =>
+                        playedIdSet.has(cell.id) ||
+                        (typeof cell.songNumber === 'number' && playedNumSet.has(cell.songNumber)),
+                    ).length;
+
+                    return (
+                      <div key={p.uid} className="py-3 space-y-2 text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Users className="h-4 w-4 text-indigo-300 shrink-0" />
+                            <span className="font-medium text-white truncate">{p.name}</span>
+                            {p.ticketNumber > 0 && (
+                              <span className="font-mono text-xs text-amber-300 shrink-0">
+                                {formatTicketNumber(p.ticketNumber)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2.5 text-xs shrink-0">
+                            <span
+                              className={`font-mono tabular-nums ${
+                                liveMatchedCount > 0 ? 'text-emerald-300 font-semibold' : 'text-slate-300'
+                              }`}
+                            >
+                              {liveMatchedCount}/15 played
+                            </span>
+                            <span className={p.isOnline ? 'text-emerald-300' : 'text-slate-500'}>
+                              {p.isOnline ? 'Online' : 'Offline'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {p.ticket.length === 15 && (
+                          <div className="flex items-center gap-2 pl-6">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAutoPrintTicketModal(false);
+                                setViewingTicketPlayerUid(p.uid);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-400/40 bg-indigo-500/15 px-2.5 py-1 text-[11px] font-semibold text-indigo-200 hover:bg-indigo-500/25 transition-colors cursor-pointer"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                              <span>View Song Ticket</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAutoPrintTicketModal(true);
+                                setViewingTicketPlayerUid(p.uid);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/25 transition-colors cursor-pointer"
+                            >
+                              <Printer className="h-3.5 w-3.5" />
+                              <span>Print Ticket</span>
+                            </button>
+                          </div>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 text-xs shrink-0">
-                        <span className="font-mono tabular-nums text-slate-300">
-                          {p.markedSongIds.length}/15 marked
-                        </span>
-                        <span className={p.isOnline ? 'text-emerald-300' : 'text-slate-500'}>
-                          {p.isOnline ? 'Online' : 'Offline'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
               {activePanel === 'played' && (
                 <div className="divide-y divide-white/10 max-h-[540px] overflow-y-auto">
-                  {playedTracks.map((t, i) => (
-                    <div key={t!.id} className="py-2.5 flex items-center justify-between gap-3 text-xs">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono tabular-nums text-slate-500 w-5 shrink-0">
-                          {i + 1}.
+                  {playedTracks.map((t, i) => {
+                    const songNum = trackSongNumberMap.get(t!.id);
+                    return (
+                      <div key={t!.id} className="py-2.5 flex items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono tabular-nums text-slate-500 w-5 shrink-0">
+                            {i + 1}.
+                          </span>
+                          {typeof songNum === 'number' && (
+                            <span className="rounded bg-emerald-500/20 border border-emerald-400/40 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-200 tabular-nums shrink-0">
+                              #{songNum}
+                            </span>
+                          )}
+                          <span className="text-white font-medium truncate">{t!.title}</span>
+                        </div>
+                        <span className="text-slate-400 truncate max-w-[120px] shrink-0">
+                          {t!.artist}
                         </span>
-                        <span className="text-white font-medium truncate">{t!.title}</span>
                       </div>
-                      <span className="text-slate-400 truncate max-w-[120px] shrink-0">
-                        {t!.artist}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1467,6 +1565,29 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
             </div>
           </div>
         </div>
+      )}
+
+      {/* Host Player Song Ticket View & Print Modal */}
+      {viewingTicketPlayer && (
+        <SongTicketModal
+          open={Boolean(viewingTicketPlayer)}
+          onClose={() => {
+            setViewingTicketPlayerUid(null);
+            setAutoPrintTicketModal(false);
+          }}
+          playerName={viewingTicketPlayer.name}
+          ticketNumber={viewingTicketPlayer.ticketNumber}
+          roomCode={room.roomCode}
+          gameName={room.gameName}
+          ticket={viewingTicketPlayer.ticket}
+          markedSongIds={viewingTicketPlayer.markedSongIds}
+          playedSongIds={livePlayedSongIds}
+          playedSongNumbers={livePlayedSongNumbers}
+          activeSongId={secret?.currentSongId || room.currentMedia?.songId || ''}
+          roomStatus={room.status}
+          autoPrintOnOpen={autoPrintTicketModal}
+          onAutoPrintHandled={() => setAutoPrintTicketModal(false)}
+        />
       )}
     </main>
   );

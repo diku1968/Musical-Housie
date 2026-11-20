@@ -1,4 +1,4 @@
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, type User } from 'firebase/auth';
 import { AlertTriangle, CheckCircle2, ExternalLink, Loader2, RefreshCw, WifiOff } from 'lucide-react';
 import {
   Component,
@@ -13,6 +13,11 @@ import {
 } from 'react';
 import { AppScreen, Header } from './components/Header.tsx';
 import { HomeView } from './components/HomeView.tsx';
+import { VisitorCounter } from './components/VisitorCounter.tsx';
+import {
+  recordVisitorSession,
+  startPresenceHeartbeat,
+} from './services/analyticsService.ts';
 import {
   auth,
   ensureAnonymousAuth,
@@ -61,6 +66,11 @@ const PlayerGameView = lazy(() =>
 const SetupGuideModal = lazy(() =>
   import('./components/SetupGuideModal.tsx').then((m) => ({ default: m.SetupGuideModal })),
 );
+const DeveloperAnalyticsView = lazy(() =>
+  import('./components/DeveloperAnalyticsView.tsx').then((m) => ({
+    default: m.DeveloperAnalyticsView,
+  })),
+);
 
 interface AppHistoryState {
   screen: AppScreen;
@@ -78,6 +88,7 @@ const VALID_STATIC_SCREENS: ReadonlySet<AppScreen> = new Set([
   'terms',
   'host-create',
   'join',
+  'dev-analytics',
 ]);
 
 const PATH_TO_SCREEN: Record<string, AppScreen> = {
@@ -89,6 +100,7 @@ const PATH_TO_SCREEN: Record<string, AppScreen> = {
   '/terms': 'terms',
   '/host-create': 'host-create',
   '/join': 'join',
+  '/dev-analytics': 'dev-analytics',
 };
 
 const SCREEN_TO_PATH: Record<AppScreen, string> = {
@@ -102,6 +114,7 @@ const SCREEN_TO_PATH: Record<AppScreen, string> = {
   join: '/join',
   'host-room': '/host-room',
   'player-room': '/player-room',
+  'dev-analytics': '/dev-analytics',
 };
 
 const PAGE_METADATA: Record<AppScreen, { title: string; description: string; canonicalPath: string }> = {
@@ -159,6 +172,11 @@ const PAGE_METADATA: Record<AppScreen, { title: string; description: string; can
   'player-room': {
     title: 'Live Ticket Room — Dhiren Pathak Present Musical Housie',
     description: 'Live player ticket and song matching view for Musical Housie.',
+    canonicalPath: '/',
+  },
+  'dev-analytics': {
+    title: 'Developer Analytics — Musical Housie',
+    description: 'Restricted developer analytics dashboard.',
     canonicalPath: '/',
   },
 };
@@ -259,6 +277,7 @@ function MusicalHousieApp() {
   const [activeRoomCode, setActiveRoomCode] = useState<string>('');
   const [inviteRoomCode, setInviteRoomCode] = useState<string>(initialRouteRef.current.inviteRoomCode);
   const [uid, setUid] = useState<string>('');
+  const [authUser, setAuthUser] = useState<User | null>(null);
   const [savedSession, setSavedSession] = useState<SavedSession | null>(() => loadLocalSession());
 
   const [booting, setBooting] = useState(true);
@@ -306,6 +325,14 @@ function MusicalHousieApp() {
           ? 'https://musical-housie.ai.studio'
           : window.location.origin;
       canonicalEl.setAttribute('href', `${origin}${meta.canonicalPath}`);
+    }
+
+    const robotsEl = document.querySelector('meta[name="robots"]');
+    if (robotsEl) {
+      robotsEl.setAttribute(
+        'content',
+        screen === 'dev-analytics' ? 'noindex, nofollow' : 'index, follow',
+      );
     }
   }, [screen]);
 
@@ -459,9 +486,21 @@ function MusicalHousieApp() {
     if (!auth) return;
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
       setUid(currentUser?.uid || '');
+      setAuthUser(currentUser);
     });
     return () => unsubAuth();
   }, [initializeBackend]);
+
+  // Deduplicated unique visitor tracking & live online presence heartbeat
+  useEffect(() => {
+    if (!authUser?.uid) return;
+    recordVisitorSession(authUser).catch(() => {});
+    const isRegistered = Boolean(!authUser.isAnonymous && authUser.email);
+    const stopPresence = startPresenceHeartbeat(authUser.uid, isRegistered);
+    return () => {
+      stopPresence();
+    };
+  }, [authUser]);
 
   // Browser History Back/Forward listener (supports Web + Android WebView)
   useEffect(() => {
@@ -831,14 +870,21 @@ function MusicalHousieApp() {
                 suppressOfflineBanner
               />
             )}
+
+            {screen === 'dev-analytics' && (
+              <DeveloperAnalyticsView onBack={() => navigateTo('home')} />
+            )}
           </Suspense>
         )}
       </div>
 
-      {!inActiveRoom && (
-        <footer className="border-t border-white/10 py-6 px-4 sm:px-6 text-xs text-slate-400">
-          <div className="mx-auto max-w-6xl flex flex-col md:flex-row items-center justify-between gap-4">
-            <span>Dhiren Pathak Present Musical Housie · Casual multiplayer music bingo</span>
+      {!inActiveRoom ? (
+        <footer className="no-print border-t border-white/10 py-6 px-4 sm:px-6 text-xs text-slate-400">
+          <div className="mx-auto max-w-6xl flex flex-col lg:flex-row items-center justify-between gap-4">
+            <div className="flex flex-col sm:flex-row items-center gap-3 text-center sm:text-left">
+              <span>Dhiren Pathak Present Musical Housie · Casual multiplayer music bingo</span>
+              <VisitorCounter />
+            </div>
             <nav aria-label="Footer navigation" className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
               <a
                 href="/"
@@ -908,6 +954,13 @@ function MusicalHousieApp() {
                 Setup Guide
               </button>
             </nav>
+          </div>
+        </footer>
+      ) : (
+        <footer className="no-print border-t border-white/10 py-3 px-4 sm:px-6 text-xs text-slate-400">
+          <div className="mx-auto max-w-6xl flex flex-wrap items-center justify-between gap-3">
+            <span>Dhiren Pathak Present Musical Housie</span>
+            <VisitorCounter compact />
           </div>
         </footer>
       )}

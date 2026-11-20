@@ -110,6 +110,18 @@ export function extractYouTubePlaylistId(inputUrl: string, depth = 0): string | 
   return null;
 }
 
+export function buildTrackSongNumberMap(tracks: readonly TrackItem[]): Map<string, number> {
+  const numberMap = new Map<string, number>();
+  let nextNumber = 1;
+  for (const track of tracks) {
+    if (!numberMap.has(track.id)) {
+      numberMap.set(track.id, nextNumber);
+      nextNumber += 1;
+    }
+  }
+  return numberMap;
+}
+
 export function generateUniqueTickets(
   tracks: TrackItem[],
   playerUids: string[],
@@ -134,6 +146,7 @@ export function generateUniqueTickets(
     );
   }
 
+  const songNumberById = buildTrackSongNumberMap(uniqueTracks);
   const ticketsByPlayer: Record<string, TicketCell[]> = {};
   const seenSignatures = new Set<string>();
   const seenOrderSignatures = new Set<string>();
@@ -171,6 +184,7 @@ export function generateUniqueTickets(
       id: t.id,
       title: t.title.slice(0, 120),
       artist: t.artist.slice(0, 80),
+      songNumber: songNumberById.get(t.id),
     }));
   }
 

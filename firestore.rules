@@ -10,6 +10,16 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (
+          request.auth.token.email == 'dhirenpathak1970@gmail.com' &&
+          request.auth.token.email_verified == true
+        )
+      );
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -20,6 +30,14 @@ service cloud.firestore {
 
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidDateKey(key) {
+      return key is string && key.size() == 10 && key.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isValidMonthKey(key) {
+      return key is string && key.size() == 7 && key.matches('^[0-9]{4}-[0-9]{2}$');
     }
 
     function isValidRoomCode(code) {
@@ -58,7 +76,8 @@ service cloud.firestore {
           'roomCode', 'gameName', 'hostUid', 'hostName', 'status',
           'sourceType', 'playlistName', 'playlistUrl', 'totalSongs',
           'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong',
-          'revealedSongs', 'enabledPatterns', 'winners', 'playersSummary',
+          'revealedSongs', 'playedSongIds', 'playedSongNumbers',
+          'enabledPatterns', 'winners', 'playersSummary',
           'randomMode', 'playerCount', 'createdAt', 'updatedAt', 'expiresAt'
         ])
         && isValidRoomCode(data.roomCode)
@@ -77,6 +96,8 @@ service cloud.firestore {
         && isValidRevealedSongMap(data.revealedCurrentSong)
         && data.revealedSongs is list && data.revealedSongs.size() <= 200
         && (data.revealedSongs.size() == 0 || (data.revealedSongs[0] is map && data.revealedSongs[0].id is string))
+        && (!('playedSongIds' in data) || (data.playedSongIds is list && data.playedSongIds.size() <= 200 && (data.playedSongIds.size() == 0 || data.playedSongIds[0] is string)))
+        && (!('playedSongNumbers' in data) || (data.playedSongNumbers is list && data.playedSongNumbers.size() <= 200 && (data.playedSongNumbers.size() == 0 || data.playedSongNumbers[0] is int)))
         && data.enabledPatterns is list && data.enabledPatterns.size() >= 1 && data.enabledPatterns.size() <= 5
         && data.enabledPatterns.hasOnly(['first_five', 'top_row', 'middle_row', 'bottom_row', 'full_house'])
         && data.winners is list && data.winners.size() <= 10
@@ -84,8 +105,8 @@ service cloud.firestore {
         && data.playersSummary is list && data.playersSummary.size() <= 100
         && (data.playersSummary.size() == 0 || (data.playersSummary[0] is map && data.playersSummary[0].uid is string))
         && data.randomMode is bool
-        && data.playerCount is int && data.playerCount >= 0 && data.playerCount <= 100
-        && data.playerCount == data.playersSummary.size()
+        && data.playerCount is int && data.playerCount >= 0 && data.playerCount <= 10000
+        && data.playersSummary.size() <= data.playerCount
         && data.createdAt is timestamp
         && data.updatedAt is timestamp
         && data.expiresAt is timestamp;
@@ -115,7 +136,7 @@ service cloud.firestore {
         && data.isOnline is bool
         && data.ticket is list && (data.ticket.size() == 0 || data.ticket.size() == 15)
         && (data.ticket.size() == 0 || (data.ticket[0] is map && data.ticket[0].id is string))
-        && data.ticketNumber is int && data.ticketNumber >= 0 && data.ticketNumber <= 100
+        && data.ticketNumber is int && data.ticketNumber >= 0 && data.ticketNumber <= 10000
         && data.markedSongIds is list && data.markedSongIds.size() <= 15
         && (data.markedSongIds.size() == 0 || (data.markedSongIds[0] is string))
         && data.joinedAt is timestamp
@@ -138,7 +159,7 @@ service cloud.firestore {
         && data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128
         && data.playerUid is string && data.playerUid.size() >= 1 && data.playerUid.size() <= 128
         && data.playerName is string && data.playerName.size() >= 1 && data.playerName.size() <= 40
-        && data.ticketNumber is int && data.ticketNumber >= 0 && data.ticketNumber <= 100
+        && data.ticketNumber is int && data.ticketNumber >= 0 && data.ticketNumber <= 10000
         && data.pattern is string && data.pattern in ['first_five', 'top_row', 'middle_row', 'bottom_row', 'full_house']
         && data.claimedSongIds is list && data.claimedSongIds.size() >= 5 && data.claimedSongIds.size() <= 15
         && data.claimedSongIds[0] is string
@@ -168,11 +189,81 @@ service cloud.firestore {
         && isValidId(data.claimId) && data.claimId == data.playerUid + '_' + data.pattern
         && isValidId(data.playerUid)
         && data.playerName is string && data.playerName.size() >= 1 && data.playerName.size() <= 40
-        && data.ticketNumber is int && data.ticketNumber >= 1 && data.ticketNumber <= 100
+        && data.ticketNumber is int && data.ticketNumber >= 1 && data.ticketNumber <= 10000
         && data.pattern is string && data.pattern in ['first_five', 'top_row', 'middle_row', 'bottom_row', 'full_house']
         && winnerId == data.pattern + '_' + data.playerUid
         && data.approvedAtMs is int && data.approvedAtMs > 0
         && data.createdAt is timestamp;
+    }
+
+    function isValidPublicVisitorStats(data) {
+      return data.keys().hasAll(['totalUniqueVisitors', 'updatedAt'])
+        && data.keys().hasOnly(['totalUniqueVisitors', 'updatedAt'])
+        && data.totalUniqueVisitors is int && data.totalUniqueVisitors >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnalyticsSummary(data) {
+      return data.keys().hasAll([
+          'totalUniqueVisitors', 'totalRegisteredUsers', 'totalAppOpens',
+          'totalGamesPlayed', 'totalCompletedGames', 'totalPlayersParticipated', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'totalUniqueVisitors', 'totalRegisteredUsers', 'totalAppOpens',
+          'totalGamesPlayed', 'totalCompletedGames', 'totalPlayersParticipated', 'updatedAt'
+        ])
+        && data.totalUniqueVisitors is int && data.totalUniqueVisitors >= 0
+        && data.totalRegisteredUsers is int && data.totalRegisteredUsers >= 0
+        && data.totalAppOpens is int && data.totalAppOpens >= 0
+        && data.totalGamesPlayed is int && data.totalGamesPlayed >= 0
+        && data.totalCompletedGames is int && data.totalCompletedGames >= 0
+        && data.totalPlayersParticipated is int && data.totalPlayersParticipated >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnalyticsDaily(data, dateKey) {
+      return data.keys().hasAll(['dateKey', 'uniqueVisitors', 'appOpens', 'updatedAt'])
+        && data.keys().hasOnly(['dateKey', 'uniqueVisitors', 'appOpens', 'updatedAt'])
+        && isValidDateKey(data.dateKey) && data.dateKey == dateKey
+        && data.uniqueVisitors is int && data.uniqueVisitors >= 0
+        && data.appOpens is int && data.appOpens >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnalyticsMonthly(data, monthKey) {
+      return data.keys().hasAll(['monthKey', 'uniqueVisitors', 'appOpens', 'updatedAt'])
+        && data.keys().hasOnly(['monthKey', 'uniqueVisitors', 'appOpens', 'updatedAt'])
+        && isValidMonthKey(data.monthKey) && data.monthKey == monthKey
+        && data.uniqueVisitors is int && data.uniqueVisitors >= 0
+        && data.appOpens is int && data.appOpens >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnalyticsVisitor(data, visitorUid) {
+      return data.keys().hasAll([
+          'uid', 'visitorKey', 'isRegistered', 'visitCount',
+          'lastVisitDateKey', 'lastVisitMonthKey', 'firstVisitAt', 'lastVisitAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'visitorKey', 'isRegistered', 'visitCount',
+          'lastVisitDateKey', 'lastVisitMonthKey', 'firstVisitAt', 'lastVisitAt'
+        ])
+        && isValidId(data.uid) && data.uid == visitorUid
+        && data.visitorKey is string && data.visitorKey.size() >= 1 && data.visitorKey.size() <= 128
+        && data.isRegistered is bool
+        && data.visitCount is int && data.visitCount >= 1
+        && isValidDateKey(data.lastVisitDateKey)
+        && isValidMonthKey(data.lastVisitMonthKey)
+        && data.firstVisitAt is timestamp
+        && data.lastVisitAt is timestamp;
+    }
+
+    function isValidAnalyticsPresence(data, visitorUid) {
+      return data.keys().hasAll(['uid', 'isRegistered', 'lastActiveAt'])
+        && data.keys().hasOnly(['uid', 'isRegistered', 'lastActiveAt'])
+        && isValidId(data.uid) && data.uid == visitorUid
+        && data.isRegistered is bool
+        && data.lastActiveAt is timestamp;
     }
 
     match /rooms/{roomId} {
@@ -192,6 +283,8 @@ service cloud.firestore {
         && incoming().winners.size() == 0
         && incoming().playersSummary.size() == 0
         && incoming().playerCount == 0
+        && (!('playedSongIds' in incoming()) || incoming().playedSongIds.size() == 0)
+        && (!('playedSongNumbers' in incoming()) || incoming().playedSongNumbers.size() == 0)
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && incoming().expiresAt > request.time;
@@ -207,12 +300,12 @@ service cloud.firestore {
         && incoming().expiresAt == existing().expiresAt
         && incoming().updatedAt == request.time
         && (
-          (existing().status == 'lobby' && incoming().status == 'lobby' && incoming().diff(existing()).affectedKeys().hasOnly(['sourceType', 'playlistName', 'playlistUrl', 'totalSongs', 'enabledPatterns', 'randomMode', 'updatedAt'])) ||
+          (existing().status == 'lobby' && incoming().status == 'lobby' && (!('playedSongIds' in incoming()) || incoming().playedSongIds.size() == 0) && (!('playedSongNumbers' in incoming()) || incoming().playedSongNumbers.size() == 0) && incoming().diff(existing()).affectedKeys().hasOnly(['sourceType', 'playlistName', 'playlistUrl', 'totalSongs', 'enabledPatterns', 'randomMode', 'playedSongIds', 'playedSongNumbers', 'updatedAt'])) ||
           (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['playersSummary', 'playerCount', 'updatedAt'])) ||
-          (existing().status == 'lobby' && existing().totalSongs >= 15 && incoming().status == 'playing' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'randomMode', 'enabledPatterns', 'updatedAt'])) ||
-          (existing().status in ['playing', 'paused'] && incoming().status in ['playing', 'paused'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'randomMode', 'updatedAt'])) ||
+          (existing().status == 'lobby' && existing().totalSongs >= 15 && incoming().status == 'playing' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'playedSongIds', 'playedSongNumbers', 'randomMode', 'enabledPatterns', 'updatedAt'])) ||
+          (existing().status in ['playing', 'paused'] && incoming().status in ['playing', 'paused'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'playedSongIds', 'playedSongNumbers', 'randomMode', 'updatedAt'])) ||
           (existing().status in ['playing', 'paused'] && incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['winners', 'updatedAt'])) ||
-          (incoming().status == 'ended' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'updatedAt']))
+          (incoming().status == 'ended' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'playedSongIds', 'playedSongNumbers', 'updatedAt']))
         );
 
       allow delete: if isSignedIn()
@@ -376,6 +469,193 @@ service cloud.firestore {
           && isValidId(winnerId)
           && existing().hostUid == request.auth.uid;
       }
+    }
+
+    // Public aggregated visitor counter ONLY (never exposes user info or private analytics)
+    match /publicStats/{statId} {
+      allow get: if statId == 'visitors';
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && statId == 'visitors'
+        && isValidPublicVisitorStats(incoming())
+        && incoming().totalUniqueVisitors == 1
+        && incoming().updatedAt == request.time
+        && !exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid));
+
+      allow update: if isSignedIn()
+        && statId == 'visitors'
+        && isValidPublicVisitorStats(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['totalUniqueVisitors', 'updatedAt'])
+        && incoming().totalUniqueVisitors == existing().totalUniqueVisitors + 1
+        && incoming().updatedAt == request.time
+        && !exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid));
+
+      allow delete: if false;
+    }
+
+    // Private developer-only global analytics summary (blind monotonic increments from app sessions)
+    match /analyticsSummary/{summaryId} {
+      allow get: if summaryId == 'global' && isAdmin();
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && summaryId == 'global'
+        && isValidAnalyticsSummary(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().totalUniqueVisitors in [0, 1]
+        && incoming().totalRegisteredUsers in [0, 1]
+        && incoming().totalAppOpens in [0, 1]
+        && incoming().totalGamesPlayed in [0, 1]
+        && incoming().totalCompletedGames in [0, 1]
+        && incoming().totalPlayersParticipated >= 0
+        && incoming().totalPlayersParticipated <= 10000
+        && (incoming().totalUniqueVisitors == 0 || (!exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)) && existsAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid))))
+        && (incoming().totalRegisteredUsers == 0 || (request.auth.token.email != null && (!exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)) || get(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.isRegistered == false) && getAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.isRegistered == true));
+
+      allow update: if isSignedIn()
+        && summaryId == 'global'
+        && isValidAnalyticsSummary(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'totalUniqueVisitors', 'totalRegisteredUsers', 'totalAppOpens',
+          'totalGamesPlayed', 'totalCompletedGames', 'totalPlayersParticipated', 'updatedAt'
+        ])
+        && incoming().totalUniqueVisitors >= existing().totalUniqueVisitors
+        && incoming().totalUniqueVisitors <= existing().totalUniqueVisitors + 1
+        && incoming().totalRegisteredUsers >= existing().totalRegisteredUsers
+        && incoming().totalRegisteredUsers <= existing().totalRegisteredUsers + 1
+        && incoming().totalAppOpens >= existing().totalAppOpens
+        && incoming().totalAppOpens <= existing().totalAppOpens + 1
+        && incoming().totalGamesPlayed >= existing().totalGamesPlayed
+        && incoming().totalGamesPlayed <= existing().totalGamesPlayed + 1
+        && incoming().totalCompletedGames >= existing().totalCompletedGames
+        && incoming().totalCompletedGames <= existing().totalCompletedGames + 1
+        && incoming().totalPlayersParticipated >= existing().totalPlayersParticipated
+        && incoming().totalPlayersParticipated <= existing().totalPlayersParticipated + 10000
+        && (incoming().totalUniqueVisitors == existing().totalUniqueVisitors || (!exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)) && existsAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid))))
+        && (incoming().totalRegisteredUsers == existing().totalRegisteredUsers || (request.auth.token.email != null && (!exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)) || get(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.isRegistered == false) && getAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.isRegistered == true));
+
+      allow delete: if false;
+    }
+
+    // Private developer-only daily visitor & app-open stats
+    match /analyticsDaily/{dateKey} {
+      allow get: if isValidDateKey(dateKey) && isAdmin();
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn()
+        && isValidDateKey(dateKey)
+        && isValidAnalyticsDaily(incoming(), dateKey)
+        && incoming().uniqueVisitors in [0, 1]
+        && incoming().appOpens in [0, 1]
+        && incoming().updatedAt == request.time
+        && (incoming().uniqueVisitors == 0 || ((!exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)) || get(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.lastVisitDateKey != dateKey) && getAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.lastVisitDateKey == dateKey));
+
+      allow update: if isSignedIn()
+        && isValidDateKey(dateKey)
+        && isValidAnalyticsDaily(incoming(), dateKey)
+        && incoming().dateKey == existing().dateKey
+        && incoming().diff(existing()).affectedKeys().hasOnly(['uniqueVisitors', 'appOpens', 'updatedAt'])
+        && incoming().uniqueVisitors >= existing().uniqueVisitors
+        && incoming().uniqueVisitors <= existing().uniqueVisitors + 1
+        && incoming().appOpens >= existing().appOpens
+        && incoming().appOpens <= existing().appOpens + 1
+        && incoming().updatedAt == request.time
+        && (incoming().uniqueVisitors == existing().uniqueVisitors || ((!exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)) || get(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.lastVisitDateKey != dateKey) && getAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.lastVisitDateKey == dateKey));
+
+      allow delete: if false;
+    }
+
+    // Private developer-only monthly visitor & app-open stats
+    match /analyticsMonthly/{monthKey} {
+      allow get: if isValidMonthKey(monthKey) && isAdmin();
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn()
+        && isValidMonthKey(monthKey)
+        && isValidAnalyticsMonthly(incoming(), monthKey)
+        && incoming().uniqueVisitors in [0, 1]
+        && incoming().appOpens in [0, 1]
+        && incoming().updatedAt == request.time
+        && (incoming().uniqueVisitors == 0 || ((!exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)) || get(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.lastVisitMonthKey != monthKey) && getAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.lastVisitMonthKey == monthKey));
+
+      allow update: if isSignedIn()
+        && isValidMonthKey(monthKey)
+        && isValidAnalyticsMonthly(incoming(), monthKey)
+        && incoming().monthKey == existing().monthKey
+        && incoming().diff(existing()).affectedKeys().hasOnly(['uniqueVisitors', 'appOpens', 'updatedAt'])
+        && incoming().uniqueVisitors >= existing().uniqueVisitors
+        && incoming().uniqueVisitors <= existing().uniqueVisitors + 1
+        && incoming().appOpens >= existing().appOpens
+        && incoming().appOpens <= existing().appOpens + 1
+        && incoming().updatedAt == request.time
+        && (incoming().uniqueVisitors == existing().uniqueVisitors || ((!exists(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)) || get(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.lastVisitMonthKey != monthKey) && getAfter(/databases/$(database)/documents/analyticsVisitors/$(request.auth.uid)).data.lastVisitMonthKey == monthKey));
+
+      allow delete: if false;
+    }
+
+    // Private visitor deduplication records (no PII; visitor can read/write only their own record)
+    match /analyticsVisitors/{visitorUid} {
+      allow get: if isSignedIn() && isValidId(visitorUid) && (request.auth.uid == visitorUid || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn()
+        && isValidId(visitorUid)
+        && request.auth.uid == visitorUid
+        && isValidAnalyticsVisitor(incoming(), visitorUid)
+        && incoming().visitCount == 1
+        && incoming().firstVisitAt == request.time
+        && incoming().lastVisitAt == request.time
+        && (!incoming().isRegistered || request.auth.token.email != null);
+
+      allow update: if isSignedIn()
+        && isValidId(visitorUid)
+        && request.auth.uid == visitorUid
+        && isValidAnalyticsVisitor(incoming(), visitorUid)
+        && incoming().uid == existing().uid
+        && incoming().firstVisitAt == existing().firstVisitAt
+        && incoming().visitCount == existing().visitCount + 1
+        && incoming().lastVisitAt == request.time
+        && (incoming().isRegistered == existing().isRegistered || (existing().isRegistered == false && incoming().isRegistered == true && request.auth.token.email != null))
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'visitorKey', 'isRegistered', 'visitCount', 'lastVisitDateKey', 'lastVisitMonthKey', 'lastVisitAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // Private live online presence heartbeats (admin-only list; self-managed writes)
+    match /analyticsPresence/{visitorUid} {
+      allow get: if isSignedIn() && isValidId(visitorUid) && (request.auth.uid == visitorUid || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn()
+        && isValidId(visitorUid)
+        && request.auth.uid == visitorUid
+        && isValidAnalyticsPresence(incoming(), visitorUid)
+        && incoming().lastActiveAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidId(visitorUid)
+        && request.auth.uid == visitorUid
+        && isValidAnalyticsPresence(incoming(), visitorUid)
+        && incoming().uid == existing().uid
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isRegistered', 'lastActiveAt'])
+        && incoming().lastActiveAt == request.time;
+
+      allow delete: if isSignedIn()
+        && isValidId(visitorUid)
+        && request.auth.uid == visitorUid;
+    }
+
+    // Admin role collection (read own status or admin; never self-writable from client)
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
+      allow list: if false;
+      allow write: if false;
     }
   }
 }

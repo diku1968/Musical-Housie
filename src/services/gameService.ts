@@ -14,7 +14,7 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { generateRoomCode, shuffleArray } from '../shared/gameLogic.ts';
+import { buildTrackSongNumberMap, generateRoomCode, shuffleArray } from '../shared/gameLogic.ts';
 import {
   ALL_PATTERNS,
   ClaimVerificationResult,
@@ -31,6 +31,10 @@ import {
   WinnerRecord,
   WinningPattern,
 } from '../shared/types.ts';
+import {
+  recordGameCompletedAnalytics,
+  recordGameStartedAnalytics,
+} from './analyticsService.ts';
 import { OperationType, auth, db, ensureAnonymousAuth, handleFirestoreError } from './firebase.ts';
 
 async function requireAuthenticatedUser() {
@@ -58,6 +62,23 @@ function toCurrentMedia(track: TrackItem | null | undefined): CurrentPlayableMed
     sourceId: track.sourceId.slice(0, 128),
     previewUrl: (track.previewUrl || '').slice(0, 300),
   };
+}
+
+function derivePlayedSongNumbers(
+  playedSongIds: readonly string[],
+  tracks: readonly TrackItem[],
+): number[] {
+  const numberById = buildTrackSongNumberMap(tracks);
+  const seen = new Set<number>();
+  const numbers: number[] = [];
+  for (const id of playedSongIds) {
+    const songNum = numberById.get(id);
+    if (songNum !== undefined && !seen.has(songNum)) {
+      seen.add(songNum);
+      numbers.push(songNum);
+    }
+  }
+  return numbers.slice(0, 200);
 }
 
 export interface SavedSession {
@@ -320,6 +341,8 @@ export async function createGameRoom(
       currentMedia: EMPTY_MEDIA,
       revealedCurrentSong: { id: '', title: '', artist: '', sourceId: '' },
       revealedSongs: [],
+      playedSongIds: [],
+      playedSongNumbers: [],
       enabledPatterns: [...ALL_PATTERNS],
       winners: [],
       playersSummary: [],
@@ -462,11 +485,6 @@ export async function joinGameRoom(
     );
   }
 
-  const currentCount = Math.max(room.playersSummary?.length || 0, room.playerCount || 0);
-  if (currentCount >= 100) {
-    throw new Error(`Room ${roomCode} is full (maximum 100 players).`);
-  }
-
   try {
     await setDoc(playerRef, {
       uid: user.uid,
@@ -559,6 +577,8 @@ export async function savePlaylistToRoom(params: {
     playlistName: playlistName.slice(0, 120),
     playlistUrl: playlistUrl.slice(0, 300),
     totalSongs: trimmedTracks.length,
+    playedSongIds: [],
+    playedSongNumbers: [],
     enabledPatterns: enabledPatterns.length > 0 ? enabledPatterns : ['full_house'],
     randomMode,
     updatedAt: serverTimestamp(),
@@ -606,7 +626,7 @@ export async function syncPlayersSummary(roomCode: string, players: PlayerData[]
   try {
     await updateDoc(doc(db, 'rooms', roomCode), {
       playersSummary: summary,
-      playerCount: summary.length,
+      playerCount: players.length,
       updatedAt: serverTimestamp(),
     });
   } catch (err) {
@@ -670,44 +690,64 @@ export async function startGameAndDealTickets(params: {
   const orderedTracks = randomMode ? shuffleArray(tracks) : [...tracks];
   const queueOrder = orderedTracks.map((t) => t.id);
   const firstSongId = queueOrder[0];
+  const initialPlayedIds = firstSongId ? [firstSongId] : [];
+  const initialPlayedNumbers = derivePlayedSongNumbers(initialPlayedIds, tracks);
 
-  const batch = writeBatch(db);
-  orderedPlayers.forEach((player, index) => {
+  // Validate all player tickets first before committing to Firestore
+  const ticketAssignments = orderedPlayers.map((player, index) => {
     const assignedTicket = ticketJson.ticketsByPlayer![player.uid];
     if (!assignedTicket || assignedTicket.length !== 15) {
       throw new Error(`Failed to allocate 15-song ticket for ${player.name}.`);
     }
     const ticketNumber = ticketJson.ticketNumbersByPlayer?.[player.uid] ?? index + 1;
-    batch.update(doc(db, 'rooms', roomCode, 'players', player.uid), {
-      ticket: assignedTicket,
-      ticketNumber,
-      markedSongIds: [],
-      lastSeenAt: serverTimestamp(),
-    });
-  });
-
-  batch.update(doc(db, 'rooms', roomCode, 'hostState', 'secret'), {
-    hostUid,
-    queueOrder,
-    currentSongId: firstSongId,
-    playedSongIds: [firstSongId],
-    updatedAt: serverTimestamp(),
-  });
-
-  batch.update(doc(db, 'rooms', roomCode), {
-    status: 'playing',
-    currentSongNumber: 1,
-    currentSongRevealed: false,
-    currentMedia: toCurrentMedia(orderedTracks[0]),
-    revealedCurrentSong: { id: '', title: '', artist: '', sourceId: '' },
-    revealedSongs: [],
-    randomMode,
-    enabledPatterns,
-    updatedAt: serverTimestamp(),
+    return { player, assignedTicket, ticketNumber };
   });
 
   try {
-    await batch.commit();
+    // Chunk player ticket writes in batches of 400 so sessions with hundreds/thousands of players
+    // never exceed Firestore's 500-operation writeBatch limit.
+    const BATCH_LIMIT = 400;
+    for (let i = 0; i < ticketAssignments.length; i += BATCH_LIMIT) {
+      const chunk = ticketAssignments.slice(i, i + BATCH_LIMIT);
+      const isLastChunk = i + BATCH_LIMIT >= ticketAssignments.length;
+      const batch = writeBatch(db);
+
+      for (const { player, assignedTicket, ticketNumber } of chunk) {
+        batch.update(doc(db, 'rooms', roomCode, 'players', player.uid), {
+          ticket: assignedTicket,
+          ticketNumber,
+          markedSongIds: [],
+          lastSeenAt: serverTimestamp(),
+        });
+      }
+
+      if (isLastChunk) {
+        batch.update(doc(db, 'rooms', roomCode, 'hostState', 'secret'), {
+          hostUid,
+          queueOrder,
+          currentSongId: firstSongId,
+          playedSongIds: initialPlayedIds,
+          updatedAt: serverTimestamp(),
+        });
+
+        batch.update(doc(db, 'rooms', roomCode), {
+          status: 'playing',
+          currentSongNumber: 1,
+          currentSongRevealed: false,
+          currentMedia: toCurrentMedia(orderedTracks[0]),
+          revealedCurrentSong: { id: '', title: '', artist: '', sourceId: '' },
+          revealedSongs: [],
+          playedSongIds: initialPlayedIds,
+          playedSongNumbers: initialPlayedNumbers,
+          randomMode,
+          enabledPatterns,
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+    }
+    recordGameStartedAnalytics(orderedPlayers.length).catch(() => {});
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `rooms/${roomCode}`);
   }
@@ -784,9 +824,19 @@ export async function advanceToNextSong(
     });
   }
 
+  const basePlayedIds = Array.from(
+    new Set([...(secret.playedSongIds || []), ...(room.playedSongIds || [])]),
+  ).slice(0, 200);
+
   const nextIdx = currentIdx + 1;
   if (nextIdx >= secret.queueOrder.length) {
     // Playlist exhausted
+    const finalPlayedIds =
+      currentTrack && !basePlayedIds.includes(currentTrack.id)
+        ? [...basePlayedIds, currentTrack.id].slice(0, 200)
+        : basePlayedIds;
+    const finalPlayedNumbers = derivePlayedSongNumbers(finalPlayedIds, secret.tracks);
+
     await updateDoc(doc(db, 'rooms', roomCode), {
       status: 'paused',
       currentSongRevealed: true,
@@ -800,6 +850,8 @@ export async function advanceToNextSong(
           }
         : room.revealedCurrentSong,
       revealedSongs: nextRevealedSongs,
+      playedSongIds: finalPlayedIds,
+      playedSongNumbers: finalPlayedNumbers,
       updatedAt: serverTimestamp(),
     });
     return { finishedPlaylist: true };
@@ -807,9 +859,11 @@ export async function advanceToNextSong(
 
   const nextSongId = secret.queueOrder[nextIdx];
   const nextTrack = secret.tracks.find((t) => t.id === nextSongId) || null;
-  const updatedPlayedIds = secret.playedSongIds.includes(nextSongId)
-    ? secret.playedSongIds
-    : [...secret.playedSongIds, nextSongId];
+  // Deduplicate playedSongIds so duplicate announcements never corrupt state
+  const updatedPlayedIds = basePlayedIds.includes(nextSongId)
+    ? basePlayedIds
+    : [...basePlayedIds, nextSongId].slice(0, 200);
+  const updatedPlayedNumbers = derivePlayedSongNumbers(updatedPlayedIds, secret.tracks);
 
   const batch = writeBatch(db);
   batch.update(doc(db, 'rooms', roomCode, 'hostState', 'secret'), {
@@ -824,6 +878,8 @@ export async function advanceToNextSong(
     currentMedia: toCurrentMedia(nextTrack),
     revealedCurrentSong: { id: '', title: '', artist: '', sourceId: '' },
     revealedSongs: nextRevealedSongs,
+    playedSongIds: updatedPlayedIds,
+    playedSongNumbers: updatedPlayedNumbers,
     updatedAt: serverTimestamp(),
   });
 
@@ -893,6 +949,7 @@ export async function endGameRoom(
       revealedSongs: nextRevealedSongs,
       updatedAt: serverTimestamp(),
     });
+    recordGameCompletedAnalytics().catch(() => {});
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `rooms/${roomCode}`);
   }
@@ -945,6 +1002,7 @@ export async function submitWinnerClaim(
   room: RoomData,
   player: PlayerData,
   pattern: WinningPattern,
+  effectiveMarkedIds?: string[],
 ): Promise<void> {
   const roomRef = doc(db, 'rooms', room.roomCode);
   let freshRoomSnap;
@@ -992,6 +1050,10 @@ export async function submitWinnerClaim(
 
   const claimedAtMs = Date.now();
   const ticketNumber = player.ticketNumber || 0;
+  const ticketIdSet = new Set(player.ticket.map((c) => c.id));
+  const resolvedClaimedSongIds = Array.from(
+    new Set((effectiveMarkedIds || player.markedSongIds).filter((id) => ticketIdSet.has(id))),
+  ).slice(0, 15);
 
   if (existingSnap.exists()) {
     const existing = existingSnap.data() as WinnerClaim;
@@ -1006,7 +1068,7 @@ export async function submitWinnerClaim(
       await updateDoc(claimRef, {
         status: 'pending',
         ticketNumber,
-        claimedSongIds: player.markedSongIds,
+        claimedSongIds: resolvedClaimedSongIds,
         ticketSnapshot: player.ticket,
         claimedAtMs,
         verifiedMatchedIds: [],
@@ -1028,7 +1090,7 @@ export async function submitWinnerClaim(
       playerName: player.name,
       ticketNumber,
       pattern,
-      claimedSongIds: player.markedSongIds,
+      claimedSongIds: resolvedClaimedSongIds,
       ticketSnapshot: player.ticket,
       claimedAtMs,
       status: 'pending',

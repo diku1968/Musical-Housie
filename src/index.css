@@ -50,3 +50,197 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Print Facility: Print only the selected 3x5 Musical Housie ticket with played highlights preserved */
+@media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  header,
+  footer,
+  nav,
+  aside,
+  .no-print {
+    display: none !important;
+  }
+
+  .print-modal-backdrop {
+    position: static !important;
+    inset: auto !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  .print-ticket-root,
+  .print-ticket-root * {
+    visibility: visible !important;
+  }
+
+  .print-ticket-root {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 12px !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+  }
+
+  .print-only-brand {
+    display: block !important;
+    color: #334155 !important;
+  }
+
+  .print-ticket-header {
+    border-bottom: 1px solid #cbd5e1 !important;
+    padding-bottom: 10px !important;
+  }
+
+  .print-title {
+    color: #0f172a !important;
+    font-size: 20px !important;
+  }
+
+  .print-subtitle {
+    color: #334155 !important;
+  }
+
+  .print-ticket-badge {
+    background-color: #fef3c7 !important;
+    border-color: #d97706 !important;
+    color: #78350f !important;
+  }
+
+  .print-played-summary {
+    color: #15803d !important;
+  }
+
+  .print-legend {
+    background-color: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+  }
+
+  .print-legend-played {
+    color: #166534 !important;
+  }
+
+  .print-legend-unplayed {
+    color: #334155 !important;
+  }
+
+  .print-ticket-body {
+    max-height: none !important;
+    overflow: visible !important;
+    padding-right: 0 !important;
+  }
+
+  .print-ticket-rows {
+    gap: 10px !important;
+  }
+
+  .print-ticket-row {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .print-row-label {
+    color: #1e293b !important;
+  }
+
+  .print-row-count {
+    color: #475569 !important;
+  }
+
+  .print-ticket-grid {
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  .ticket-cell-played {
+    background-color: #dcfce7 !important;
+    border: 2px solid #16a34a !important;
+    color: #052e16 !important;
+    box-shadow: none !important;
+    min-height: 78px !important;
+  }
+
+  .ticket-cell-unplayed {
+    background-color: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+    color: #0f172a !important;
+    box-shadow: none !important;
+    min-height: 78px !important;
+  }
+
+  .ticket-cell-played-badge {
+    background-color: #16a34a !important;
+    border-color: #15803d !important;
+    color: #ffffff !important;
+  }
+
+  .ticket-cell-unplayed-badge {
+    background-color: #ffffff !important;
+    border-color: #94a3b8 !important;
+  }
+
+  .ticket-song-number {
+    background-color: #f1f5f9 !important;
+    border-color: #94a3b8 !important;
+    color: #0f172a !important;
+  }
+
+  .ticket-cell-played .ticket-song-number {
+    background-color: #bbf7d0 !important;
+    border-color: #16a34a !important;
+    color: #052e16 !important;
+  }
+
+  .ticket-song-title {
+    color: #0f172a !important;
+  }
+
+  .ticket-cell-played .ticket-song-title {
+    color: #052e16 !important;
+  }
+
+  .ticket-song-artist {
+    color: #475569 !important;
+  }
+
+  .ticket-status-played {
+    color: #15803d !important;
+  }
+
+  .ticket-status-unplayed {
+    color: #64748b !important;
+  }
+}
+

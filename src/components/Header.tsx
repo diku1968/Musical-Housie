@@ -10,7 +10,8 @@ export type AppScreen =
   | 'about'
   | 'contact'
   | 'privacy-policy'
-  | 'terms';
+  | 'terms'
+  | 'dev-analytics';
 
 interface HeaderProps {
   currentScreen: AppScreen;

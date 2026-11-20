@@ -11,6 +11,7 @@ import {
   setPersistence,
   signInAnonymously,
   signInWithPopup,
+  signOut,
 } from 'firebase/auth';
 import {
   Firestore,
@@ -322,11 +323,16 @@ export async function signInWithGoogleFallback(): Promise<User> {
   return cred.user;
 }
 
-export async function getCurrentIdToken(): Promise<string | null> {
+export async function getCurrentIdToken(forceRefresh = false): Promise<string | null> {
   if (!authInstance?.currentUser) return null;
   try {
-    return await authInstance.currentUser.getIdToken();
+    return await authInstance.currentUser.getIdToken(forceRefresh);
   } catch {
     return null;
   }
+}
+
+export async function signOutCurrentUser(): Promise<void> {
+  if (!authInstance) return;
+  await signOut(authInstance);
 }

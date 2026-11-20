@@ -3,7 +3,9 @@ import {
   Award,
   BellRing,
   CheckCircle2,
+  Eye,
   Loader2,
+  Printer,
   Sparkles,
   Volume2,
   VolumeX,
@@ -40,6 +42,7 @@ import {
 import { GlobalBranding } from './GlobalBranding.tsx';
 import { HousieTicket } from './HousieTicket.tsx';
 import { MusicVisualizer } from './MusicVisualizer.tsx';
+import { SongTicketModal } from './SongTicketModal.tsx';
 import { WinningPatternsBoard } from './WinningPatternsBoard.tsx';
 import { YouTubePlayer } from './YouTubePlayer.tsx';
 
@@ -97,12 +100,18 @@ export function PlayerGameView({
   const [claimFeedback, setClaimFeedback] = useState('');
   const prevWinnersCountRef = useRef(0);
 
-  // Phone audio & auto-tick controls
+  // Phone audio, live song ticket view & print controls
   const [phoneAudioEnabled, setPhoneAudioEnabled] = useState(false);
   const [phoneAudioPlaySignal, setPhoneAudioPlaySignal] = useState(0);
   const [phonePlayerActive, setPhonePlayerActive] = useState(false);
-  const [autoTickEnabled, setAutoTickEnabled] = useState(false);
-  const [matchAlert, setMatchAlert] = useState<{ songId: string; title: string; artist: string; autoTicked: boolean } | null>(null);
+  const [ticketModalOpen, setTicketModalOpen] = useState(false);
+  const [autoPrintTicket, setAutoPrintTicket] = useState(false);
+  const [matchAlert, setMatchAlert] = useState<{
+    songId: string;
+    songNumber?: number;
+    title: string;
+    artist: string;
+  } | null>(null);
 
   const notifiedMatchRef = useRef<string>('');
   const autoMarkingSigRef = useRef<string>('');
@@ -176,6 +185,44 @@ export function PlayerGameView({
     (room?.currentSongRevealed ? room.revealedCurrentSong?.id : '') ||
     '';
 
+  const livePlayedSongIds = useMemo(() => {
+    if (!room || room.status === 'lobby') return [];
+    const set = new Set<string>();
+    for (const id of room.playedSongIds || []) {
+      if (id) set.add(id);
+    }
+    if (activeSongId) set.add(activeSongId);
+    for (const rev of room.revealedSongs || []) {
+      if (rev.id) set.add(rev.id);
+    }
+    return Array.from(set);
+  }, [room, activeSongId]);
+
+  const livePlayedSongNumbers = useMemo(() => {
+    if (!room || room.status === 'lobby') return [];
+    return Array.from(new Set(room.playedSongNumbers || []));
+  }, [room]);
+
+  const livePlayedMatchedTicketIds = useMemo(() => {
+    if (!player || room?.status === 'lobby') return [];
+    const idSet = new Set(livePlayedSongIds);
+    const numSet = new Set(livePlayedSongNumbers);
+    return player.ticket
+      .filter(
+        (cell) =>
+          idSet.has(cell.id) || (typeof cell.songNumber === 'number' && numSet.has(cell.songNumber)),
+      )
+      .map((cell) => cell.id);
+  }, [player, room?.status, livePlayedSongIds, livePlayedSongNumbers]);
+
+  const effectiveMarkedSongIds = useMemo(() => {
+    if (!player) return [];
+    return Array.from(new Set([...(player.markedSongIds || []), ...livePlayedMatchedTicketIds])).slice(
+      0,
+      15,
+    );
+  }, [player, livePlayedMatchedTicketIds]);
+
   const activeMatchCell: TicketCell | null = useMemo(() => {
     if (!player || !activeSongId || room?.status === 'lobby' || room?.status === 'ended') {
       return null;
@@ -183,28 +230,18 @@ export function PlayerGameView({
     return player.ticket.find((cell) => cell.id === activeSongId) || null;
   }, [player, activeSongId, room?.status]);
 
-  // Notify player & auto-tick matched song(s) on ticket
+  // Automatically synchronize all host-played songs onto this player's ticket in real time
   useEffect(() => {
-    if (!room || !player || room.status === 'lobby' || room.status === 'ended') {
+    if (!room || !player || room.status === 'lobby') {
       setMatchAlert(null);
       return;
     }
 
-    const playedTicketIds = new Set<string>();
-    if (activeSongId) playedTicketIds.add(activeSongId);
-    for (const rev of room.revealedSongs || []) {
-      if (rev.id) playedTicketIds.add(rev.id);
-    }
-
-    const ticketMatchedIds = player.ticket
-      .filter((c) => playedTicketIds.has(c.id))
-      .map((c) => c.id);
-
-    if (autoTickEnabled && ticketMatchedIds.length > 0) {
+    if (room.status !== 'ended' && livePlayedMatchedTicketIds.length > 0) {
       const markedSet = new Set(player.markedSongIds);
-      const missing = ticketMatchedIds.filter((id) => !markedSet.has(id));
+      const missing = livePlayedMatchedTicketIds.filter((id) => !markedSet.has(id));
       if (missing.length > 0) {
-        const sig = `${room.currentSongNumber}:${missing.join(',')}`;
+        const sig = `${room.currentSongNumber}:${livePlayedSongIds.length}:${missing.join(',')}`;
         if (autoMarkingSigRef.current !== sig) {
           autoMarkingSigRef.current = sig;
           autoMarkPlayerSongs(roomCode, playerUid, player.markedSongIds, missing).catch(() => {
@@ -214,12 +251,12 @@ export function PlayerGameView({
       }
     }
 
-    if (autoTickEnabled && activeMatchCell) {
+    if (room.status !== 'ended' && activeMatchCell) {
       setMatchAlert({
         songId: activeMatchCell.id,
+        songNumber: activeMatchCell.songNumber,
         title: activeMatchCell.title,
         artist: activeMatchCell.artist,
-        autoTicked: true,
       });
 
       if (notifiedMatchRef.current !== activeMatchCell.id) {
@@ -239,13 +276,12 @@ export function PlayerGameView({
   }, [
     room,
     player,
-    activeSongId,
+    livePlayedSongIds.length,
+    livePlayedMatchedTicketIds,
     activeMatchCell,
-    autoTickEnabled,
     roomCode,
     playerUid,
   ]);
-
 
   const winnersCountByPattern = useMemo(() => {
     const map = new Map<WinningPattern, number>();
@@ -269,13 +305,13 @@ export function PlayerGameView({
     if (!room || !player) return [];
     return room.enabledPatterns.filter((p) => {
       if (playerWonPatterns.has(p)) return false;
-      const ready = isClientTicketReadyForPattern(player.ticket, player.markedSongIds, p);
+      const ready = isClientTicketReadyForPattern(player.ticket, effectiveMarkedSongIds, p);
       const existingClaim = claims.find((c) => c.pattern === p);
       const alreadyClaimed =
         existingClaim && (existingClaim.status === 'pending' || existingClaim.status === 'approved');
       return ready && !alreadyClaimed;
     });
-  }, [room, player, claims, playerWonPatterns]);
+  }, [room, player, effectiveMarkedSongIds, claims, playerWonPatterns]);
 
   const handleEnablePhoneAudio = () => {
     try {
@@ -295,6 +331,8 @@ export function PlayerGameView({
 
   const handleToggleSong = async (songId: string) => {
     if (!room || !player || room.status === 'ended') return;
+    // Keep officially played songs locked as selected/played across all players
+    if (livePlayedMatchedTicketIds.includes(songId)) return;
     setError('');
     try {
       await togglePlayerTicketMark(roomCode, playerUid, player.markedSongIds, songId);
@@ -308,7 +346,7 @@ export function PlayerGameView({
     setClaimFeedback('');
     setSubmittingClaim(true);
     try {
-      await submitWinnerClaim(room, player, pattern);
+      await submitWinnerClaim(room, player, pattern, effectiveMarkedSongIds);
       setClaimFeedback(
         `${PATTERN_LABELS[pattern]} claim sent to ${room.hostName} for verification!`,
       );
@@ -416,7 +454,7 @@ export function PlayerGameView({
           enabledPatterns={room.enabledPatterns}
           winners={winners}
           ticket={player.ticket}
-          markedSongIds={player.markedSongIds}
+          markedSongIds={effectiveMarkedSongIds}
           currentPlayerUid={player.uid}
         />
       )}
@@ -439,10 +477,13 @@ export function PlayerGameView({
           {room.playersSummary && room.playersSummary.length > 0 && (
             <div className="pt-2 border-t border-white/10">
               <p className="text-xs text-slate-400 mb-2">
-                {room.playersSummary.length} player(s) in lobby
+                {Math.max(room.playerCount || 0, room.playersSummary.length)} player(s) in lobby
               </p>
               <p className="text-sm text-slate-200">
                 {room.playersSummary.map((p) => p.name).join(' · ')}
+                {(room.playerCount || 0) > room.playersSummary.length
+                  ? ` · +${(room.playerCount || 0) - room.playersSummary.length} more`
+                  : ''}
               </p>
             </div>
           )}
@@ -454,15 +495,15 @@ export function PlayerGameView({
         <>
           {/* Live Match Notification Banner */}
           {matchAlert && (
-            <div className="rounded-2xl border border-amber-300/70 bg-gradient-to-r from-amber-500/25 via-emerald-500/20 to-indigo-500/20 p-4 shadow-lg flex items-start gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-400 text-slate-950 shrink-0">
+            <div className="rounded-2xl border border-emerald-400/70 bg-gradient-to-r from-emerald-500/25 via-emerald-500/15 to-indigo-500/20 p-4 shadow-lg flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-400 text-slate-950 shrink-0">
                 <BellRing className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-extrabold uppercase tracking-wide text-amber-300">
-                  {matchAlert.autoTicked
-                    ? 'Song on Your Ticket · Auto-Ticked!'
-                    : 'Song Match Found on Your Ticket!'}
+                <div className="text-xs font-extrabold uppercase tracking-wide text-emerald-300">
+                  {typeof matchAlert.songNumber === 'number'
+                    ? `Song #${matchAlert.songNumber} on Your Ticket · Automatically Highlighted!`
+                    : 'Song on Your Ticket · Automatically Highlighted!'}
                 </div>
                 <div className="font-display text-base sm:text-lg font-extrabold text-white truncate">
                   {matchAlert.title}
@@ -497,11 +538,18 @@ export function PlayerGameView({
           {/* Phone Audio + Visualizer Card */}
           <div className="rounded-3xl border border-white/10 bg-[#121830] p-5 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-mono text-sm font-bold text-indigo-300 tabular-nums">
-                Song #{room.currentSongNumber} of {room.totalSongs}
-              </span>
-              <span className="font-mono text-xs text-slate-300 tabular-nums">
-                {player.markedSongIds.length} / 15 marked on ticket
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm font-bold text-indigo-300 tabular-nums">
+                  Call {room.currentSongNumber} of {room.totalSongs}
+                </span>
+                {livePlayedSongNumbers.length > 0 && (
+                  <span className="rounded-lg border border-emerald-400/40 bg-emerald-500/15 px-2 py-0.5 font-mono text-xs font-bold text-emerald-200 tabular-nums">
+                    Song #{livePlayedSongNumbers[livePlayedSongNumbers.length - 1]}
+                  </span>
+                )}
+              </div>
+              <span className="font-mono text-xs text-emerald-300 font-semibold tabular-nums">
+                {livePlayedMatchedTicketIds.length} / 15 played on ticket
               </span>
             </div>
 
@@ -586,16 +634,14 @@ export function PlayerGameView({
               <div className="rounded-xl border border-white/10 bg-[#090D1C] px-4 py-3 text-sm text-slate-300">
                 {room.status === 'ended'
                   ? 'Game has ended. Thank you for playing!'
-                  : autoTickEnabled
-                    ? 'Auto-Tick is ON — songs matching your ticket are ticked automatically as they play.'
-                    : 'Listen to the song and tap it on your ticket to mark it (or enable Auto-Tick below).'}
+                  : 'Live Sync Active — played songs automatically highlight in green with a tick mark across every player’s ticket.'}
               </div>
             )}
           </div>
 
           {/* Interactive 3x5 Ticket */}
           <div className="rounded-3xl border border-white/10 bg-[#121830] p-4 sm:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2.5 flex-wrap">
                   <h2 className="font-display text-lg sm:text-xl font-bold text-white">
@@ -608,29 +654,42 @@ export function PlayerGameView({
                   )}
                 </div>
                 <span className="text-xs text-slate-400">
-                  {autoTickEnabled
-                    ? 'Auto-tick is ON for matching songs · tap anytime to adjust'
-                    : 'Tap matching songs on your ticket to tick · turn on Auto-Tick if preferred'}
+                  Played songs highlight automatically in green with a tick mark · unplayed songs stay unselected
                 </span>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setAutoTickEnabled((prev) => !prev)}
-                className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
-                  autoTickEnabled
-                    ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
-                    : 'border-white/15 bg-white/5 text-slate-300 hover:bg-white/10'
-                }`}
-              >
-                Auto-Tick: {autoTickEnabled ? 'On' : 'Off'}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAutoPrintTicket(false);
+                    setTicketModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-400/40 bg-indigo-500/15 px-3 py-1.5 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/25 transition-colors cursor-pointer"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  <span>View Song Ticket</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAutoPrintTicket(true);
+                    setTicketModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-400/45 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/25 transition-colors cursor-pointer"
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                  <span>Print Ticket</span>
+                </button>
+              </div>
             </div>
 
             <HousieTicket
               ticket={player.ticket}
-              markedSongIds={player.markedSongIds}
-              activeMatchSongId={autoTickEnabled && activeMatchCell ? activeMatchCell.id : ''}
+              markedSongIds={effectiveMarkedSongIds}
+              playedSongIds={livePlayedSongIds}
+              playedSongNumbers={livePlayedSongNumbers}
+              activeMatchSongId={activeMatchCell ? activeMatchCell.id : ''}
               onToggleSong={handleToggleSong}
               disabled={room.status === 'ended'}
             />
@@ -745,10 +804,10 @@ export function PlayerGameView({
                 const patternWinnerCount = winnersCountByPattern.get(pattern) || 0;
                 const ready = isClientTicketReadyForPattern(
                   player.ticket,
-                  player.markedSongIds,
+                  effectiveMarkedSongIds,
                   pattern,
                 );
-                const progress = getPatternProgress(player.ticket, player.markedSongIds, pattern);
+                const progress = getPatternProgress(player.ticket, effectiveMarkedSongIds, pattern);
                 const existingClaim = claims.find((c) => c.pattern === pattern);
                 const alreadyClaimed =
                   existingClaim &&
@@ -814,6 +873,27 @@ export function PlayerGameView({
           </div>
         </div>
       )}
+
+      {/* Full Song Ticket View & Print Modal */}
+      <SongTicketModal
+        open={ticketModalOpen}
+        onClose={() => {
+          setTicketModalOpen(false);
+          setAutoPrintTicket(false);
+        }}
+        playerName={player.name}
+        ticketNumber={player.ticketNumber}
+        roomCode={room.roomCode}
+        gameName={room.gameName}
+        ticket={player.ticket}
+        markedSongIds={effectiveMarkedSongIds}
+        playedSongIds={livePlayedSongIds}
+        playedSongNumbers={livePlayedSongNumbers}
+        activeSongId={activeMatchCell ? activeMatchCell.id : ''}
+        roomStatus={room.status}
+        autoPrintOnOpen={autoPrintTicket}
+        onAutoPrintHandled={() => setAutoPrintTicket(false)}
+      />
     </main>
   );
 }

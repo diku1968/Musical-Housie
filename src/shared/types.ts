@@ -31,6 +31,7 @@ export interface TicketCell {
   id: string;
   title: string;
   artist: string;
+  songNumber?: number;
 }
 
 export interface RevealedSong {
@@ -81,6 +82,8 @@ export interface RoomData {
   currentMedia?: CurrentPlayableMedia;
   revealedCurrentSong: RevealedSong;
   revealedSongs: RevealedSong[];
+  playedSongIds?: string[];
+  playedSongNumbers?: number[];
   enabledPatterns: WinningPattern[];
   winners: WinnerRecord[];
   playersSummary: PlayerSummary[];

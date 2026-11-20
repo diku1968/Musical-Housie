@@ -37,7 +37,17 @@ function loadFirebaseConfig(): FirebaseAppletConfig | null {
   }
 }
 
-const tokenUidCache = new Map<string, { uid: string; expiresAt: number }>();
+interface VerifiedAuthUser {
+  uid: string;
+  email: string | null;
+  emailVerified: boolean;
+  idToken: string;
+}
+
+const tokenUidCache = new Map<
+  string,
+  { uid: string; email: string | null; emailVerified: boolean; expiresAt: number }
+>();
 
 function cleanExpiredTokenCache() {
   const now = Date.now();
@@ -48,9 +58,7 @@ function cleanExpiredTokenCache() {
   }
 }
 
-async function verifyFirebaseAuth(
-  req: Request,
-): Promise<{ uid: string; idToken: string } | null> {
+async function verifyFirebaseAuth(req: Request): Promise<VerifiedAuthUser | null> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return null;
   const idToken = authHeader.slice('Bearer '.length).trim();
@@ -59,7 +67,12 @@ async function verifyFirebaseAuth(
   const tokenHash = crypto.createHash('sha256').update(idToken).digest('hex');
   const cached = tokenUidCache.get(tokenHash);
   if (cached && cached.expiresAt > Date.now()) {
-    return { uid: cached.uid, idToken };
+    return {
+      uid: cached.uid,
+      email: cached.email,
+      emailVerified: cached.emailVerified,
+      idToken,
+    };
   }
 
   const fbConfig = loadFirebaseConfig();
@@ -75,13 +88,24 @@ async function verifyFirebaseAuth(
       },
     );
     if (!resp.ok) return null;
-    const json = (await resp.json()) as { users?: Array<{ localId?: string }> };
-    const uid = json.users?.[0]?.localId;
+    const json = (await resp.json()) as {
+      users?: Array<{ localId?: string; email?: string; emailVerified?: boolean }>;
+    };
+    const userRecord = json.users?.[0];
+    const uid = userRecord?.localId;
     if (!uid) return null;
 
+    const email = typeof userRecord.email === 'string' ? userRecord.email : null;
+    const emailVerified = Boolean(userRecord.emailVerified);
+
     cleanExpiredTokenCache();
-    tokenUidCache.set(tokenHash, { uid, expiresAt: Date.now() + 30_000 });
-    return { uid, idToken };
+    tokenUidCache.set(tokenHash, {
+      uid,
+      email,
+      emailVerified,
+      expiresAt: Date.now() + 30_000,
+    });
+    return { uid, email, emailVerified, idToken };
   } catch {
     return null;
   }
@@ -157,6 +181,80 @@ async function fetchFirestoreDocumentOptional(
     decoded[k] = decodeFirestoreValue(v);
   }
   return decoded;
+}
+
+async function listFirestoreCollection(
+  config: FirebaseAppletConfig,
+  collectionPath: string,
+  bearerToken: string,
+  maxPages = 10,
+): Promise<Array<Record<string, unknown>>> {
+  const dbId = config.firestoreDatabaseId || '(default)';
+  const baseUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(config.projectId)}/databases/${encodeURIComponent(dbId)}/documents/${collectionPath}`;
+  const results: Array<Record<string, unknown>> = [];
+  let pageToken = '';
+
+  for (let page = 0; page < maxPages; page++) {
+    const url = pageToken
+      ? `${baseUrl}?pageSize=500&pageToken=${encodeURIComponent(pageToken)}`
+      : `${baseUrl}?pageSize=500`;
+    const resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${bearerToken}`,
+      },
+    });
+    if (resp.status === 404) {
+      return results;
+    }
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`Firestore REST list error (${resp.status}) at ${collectionPath}: ${errText}`);
+    }
+    const json = (await resp.json()) as {
+      documents?: Array<{ fields?: Record<string, Record<string, unknown>> }>;
+      nextPageToken?: string;
+    };
+    for (const docItem of json.documents || []) {
+      const decoded: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(docItem.fields || {})) {
+        decoded[k] = decodeFirestoreValue(v);
+      }
+      results.push(decoded);
+    }
+    if (!json.nextPageToken) break;
+    pageToken = json.nextPageToken;
+  }
+
+  return results;
+}
+
+const AUTHORIZED_ADMIN_EMAIL = (
+  process.env.ADMIN_EMAIL || 'dhirenpathak1970@gmail.com'
+)
+  .trim()
+  .toLowerCase();
+
+async function isAuthorizedDeveloper(
+  fbConfig: FirebaseAppletConfig,
+  authUser: VerifiedAuthUser,
+): Promise<boolean> {
+  if (
+    authUser.emailVerified &&
+    authUser.email &&
+    authUser.email.trim().toLowerCase() === AUTHORIZED_ADMIN_EMAIL
+  ) {
+    return true;
+  }
+  try {
+    const adminDoc = await fetchFirestoreDocumentOptional(
+      fbConfig,
+      `admins/${authUser.uid}`,
+      authUser.idToken,
+    );
+    return Boolean(adminDoc);
+  } catch {
+    return false;
+  }
 }
 
 const roomVerificationLocks = new Map<string, Promise<unknown>>();
@@ -918,6 +1016,89 @@ async function startServer() {
           error instanceof Error
             ? error.message
             : 'Server verification failed or unauthorized.',
+      });
+    }
+  });
+
+  // Private Developer-Only Analytics Dashboard API (Backend-validated admin access)
+  app.get('/api/admin/analytics', async (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store, private');
+    try {
+      const authUser = await verifyFirebaseAuth(req);
+      if (!authUser) {
+        res.status(401).json({ error: 'Authentication required to access developer analytics.' });
+        return;
+      }
+
+      const fbConfig = loadFirebaseConfig();
+      if (!fbConfig?.projectId) {
+        res.status(500).json({ error: 'Firebase configuration missing on server.' });
+        return;
+      }
+
+      const authorized = await isAuthorizedDeveloper(fbConfig, authUser);
+      if (!authorized) {
+        res.status(403).json({
+          error: 'Access denied. Developer analytics are restricted to authorized administrators.',
+        });
+        return;
+      }
+
+      const now = new Date();
+      const dateKey = now.toISOString().slice(0, 10);
+      const monthKey = now.toISOString().slice(0, 7);
+
+      const [publicStatsDoc, summaryDoc, dailyDoc, monthlyDoc, presenceDocs] = await Promise.all([
+        fetchFirestoreDocumentOptional(fbConfig, 'publicStats/visitors', authUser.idToken),
+        fetchFirestoreDocumentOptional(fbConfig, 'analyticsSummary/global', authUser.idToken),
+        fetchFirestoreDocumentOptional(fbConfig, `analyticsDaily/${dateKey}`, authUser.idToken),
+        fetchFirestoreDocumentOptional(fbConfig, `analyticsMonthly/${monthKey}`, authUser.idToken),
+        listFirestoreCollection(fbConfig, 'analyticsPresence', authUser.idToken),
+      ]);
+
+      const ONLINE_WINDOW_MS = 120_000;
+      const nowMs = Date.now();
+      let currentlyOnlineUsers = 0;
+      for (const docItem of presenceDocs) {
+        const rawTs = docItem.lastActiveAt;
+        if (typeof rawTs === 'string') {
+          const parsedMs = Date.parse(rawTs);
+          if (!Number.isNaN(parsedMs) && nowMs - parsedMs <= ONLINE_WINDOW_MS) {
+            currentlyOnlineUsers += 1;
+          }
+        }
+      }
+
+      const publicTotal = Math.max(0, Number(publicStatsDoc?.totalUniqueVisitors || 0));
+      const summaryTotal = Math.max(0, Number(summaryDoc?.totalUniqueVisitors || 0));
+
+      res.json({
+        ok: true,
+        metrics: {
+          totalUniqueVisitors: Math.max(publicTotal, summaryTotal),
+          totalRegisteredUsers: Math.max(0, Number(summaryDoc?.totalRegisteredUsers || 0)),
+          totalAppOpens: Math.max(0, Number(summaryDoc?.totalAppOpens || 0)),
+          todaysVisitors: Math.max(0, Number(dailyDoc?.uniqueVisitors || 0)),
+          todaysAppOpens: Math.max(0, Number(dailyDoc?.appOpens || 0)),
+          monthlyVisitors: Math.max(0, Number(monthlyDoc?.uniqueVisitors || 0)),
+          monthlyAppOpens: Math.max(0, Number(monthlyDoc?.appOpens || 0)),
+          currentlyOnlineUsers,
+          totalGamesPlayed: Math.max(0, Number(summaryDoc?.totalGamesPlayed || 0)),
+          totalCompletedGames: Math.max(0, Number(summaryDoc?.totalCompletedGames || 0)),
+          totalPlayersParticipated: Math.max(0, Number(summaryDoc?.totalPlayersParticipated || 0)),
+        },
+        dateKey,
+        monthKey,
+        generatedAt: now.toISOString(),
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unable to load developer analytics.';
+      const status = msg.includes('(403)') ? 403 : 500;
+      res.status(status).json({
+        error:
+          status === 403
+            ? 'Access denied. Developer analytics are restricted to authorized administrators.'
+            : 'Unable to load developer analytics right now.',
       });
     }
   });

@@ -73,6 +73,14 @@
           "type": "array",
           "description": "Songs revealed by the host so far"
         },
+        "playedSongIds": {
+          "type": "array",
+          "description": "Deduplicated list of officially played song IDs for this game session (synced live to all players)"
+        },
+        "playedSongNumbers": {
+          "type": "array",
+          "description": "Deduplicated list of 1-based playlist song numbers played in this game session"
+        },
         "enabledPatterns": {
           "type": "array",
           "description": "Winning patterns enabled for this game"
@@ -372,6 +380,125 @@
         "approvedAtMs",
         "createdAt"
       ]
+    },
+    "PublicVisitorStats": {
+      "title": "PublicVisitorStats",
+      "description": "Publicly readable aggregated total unique visitor count only; never stores PII or private metrics.",
+      "type": "object",
+      "properties": {
+        "totalUniqueVisitors": {
+          "type": "integer",
+          "description": "Cumulative unique visitor count displayed in the public website visitor counter"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["totalUniqueVisitors", "updatedAt"]
+    },
+    "AnalyticsSummary": {
+      "title": "AnalyticsSummary",
+      "description": "Private developer-only global analytics counters.",
+      "type": "object",
+      "properties": {
+        "totalUniqueVisitors": { "type": "integer" },
+        "totalRegisteredUsers": { "type": "integer" },
+        "totalAppOpens": { "type": "integer" },
+        "totalGamesPlayed": { "type": "integer" },
+        "totalCompletedGames": { "type": "integer" },
+        "totalPlayersParticipated": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "totalUniqueVisitors",
+        "totalRegisteredUsers",
+        "totalAppOpens",
+        "totalGamesPlayed",
+        "totalCompletedGames",
+        "totalPlayersParticipated",
+        "updatedAt"
+      ]
+    },
+    "AnalyticsDaily": {
+      "title": "AnalyticsDaily",
+      "description": "Private developer-only daily unique visitor and app-open counters keyed by YYYY-MM-DD.",
+      "type": "object",
+      "properties": {
+        "dateKey": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "uniqueVisitors": { "type": "integer" },
+        "appOpens": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["dateKey", "uniqueVisitors", "appOpens", "updatedAt"]
+    },
+    "AnalyticsMonthly": {
+      "title": "AnalyticsMonthly",
+      "description": "Private developer-only monthly unique visitor and app-open counters keyed by YYYY-MM.",
+      "type": "object",
+      "properties": {
+        "monthKey": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 7,
+          "pattern": "^[0-9]{4}-[0-9]{2}$"
+        },
+        "uniqueVisitors": { "type": "integer" },
+        "appOpens": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["monthKey", "uniqueVisitors", "appOpens", "updatedAt"]
+    },
+    "AnalyticsVisitor": {
+      "title": "AnalyticsVisitor",
+      "description": "Private per-visitor deduplication record storing anonymous/account identity metadata without PII.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "visitorKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "isRegistered": { "type": "boolean" },
+        "visitCount": { "type": "integer" },
+        "lastVisitDateKey": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "lastVisitMonthKey": { "type": "string", "minLength": 7, "maxLength": 7, "pattern": "^[0-9]{4}-[0-9]{2}$" },
+        "firstVisitAt": { "type": "string", "format": "date-time" },
+        "lastVisitAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "visitorKey",
+        "isRegistered",
+        "visitCount",
+        "lastVisitDateKey",
+        "lastVisitMonthKey",
+        "firstVisitAt",
+        "lastVisitAt"
+      ]
+    },
+    "AnalyticsPresence": {
+      "title": "AnalyticsPresence",
+      "description": "Private live presence heartbeat record used exclusively by the developer dashboard to count online users.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "isRegistered": { "type": "boolean" },
+        "lastActiveAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "isRegistered", "lastActiveAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Authorized developer/admin role assignment keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "role": { "type": "string", "enum": ["admin"] }
+      },
+      "required": ["uid", "role"]
     }
   },
   "firestore": {
@@ -394,6 +521,34 @@
     "/rooms/{roomId}/winners/{winnerId}": {
       "schema": { "$ref": "#/entities/Winner" },
       "description": "Immutable approved winners uniquely constrained by roomId + pattern + playerUid."
+    },
+    "/publicStats/{statId}": {
+      "schema": { "$ref": "#/entities/PublicVisitorStats" },
+      "description": "Public read-only aggregated total visitor count (doc ID: visitors)."
+    },
+    "/analyticsSummary/{summaryId}": {
+      "schema": { "$ref": "#/entities/AnalyticsSummary" },
+      "description": "Developer-only global analytics totals (doc ID: global)."
+    },
+    "/analyticsDaily/{dateKey}": {
+      "schema": { "$ref": "#/entities/AnalyticsDaily" },
+      "description": "Developer-only daily visitor and app-open counters keyed by YYYY-MM-DD."
+    },
+    "/analyticsMonthly/{monthKey}": {
+      "schema": { "$ref": "#/entities/AnalyticsMonthly" },
+      "description": "Developer-only monthly visitor and app-open counters keyed by YYYY-MM."
+    },
+    "/analyticsVisitors/{visitorUid}": {
+      "schema": { "$ref": "#/entities/AnalyticsVisitor" },
+      "description": "Private visitor deduplication records preventing repeated refresh double-counting."
+    },
+    "/analyticsPresence/{visitorUid}": {
+      "schema": { "$ref": "#/entities/AnalyticsPresence" },
+      "description": "Private live presence heartbeats for counting currently online users."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Authorized developer/admin role documents."
     }
   }
 }
