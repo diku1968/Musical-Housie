@@ -78,9 +78,32 @@ export function loadYouTubeIframeApi(): Promise<void> {
   return ytApiPromise;
 }
 
+// Client-side direct YouTube Title Resolver without backend /api/ server
+async function fetchYouTubeVideoTitle(videoId: string): Promise<{ title: string; author: string }> {
+  try {
+    const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.title) {
+        return {
+          title: data.title,
+          author: data.author_name || 'YouTube Music',
+        };
+      }
+    }
+  } catch {
+    // Fallback if noembed is blocked
+  }
+
+  return {
+    title: `Song #${videoId.slice(0, 6)}`,
+    author: 'YouTube',
+  };
+}
+
 /**
- * Official YouTube IFrame Player API + YouTube oEmbed playlist resolver
- * Used when YOUTUBE_API_KEY is not configured on the server.
+ * Client-Side YouTube IFrame Player API playlist resolver
+ * Works completely static on GitHub Pages without requiring Node.js backend
  */
 export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promise<{
   tracks: TrackItem[];
@@ -106,6 +129,7 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
   let player: YTPlayerInstance | null = null;
   let pollTimer: number | undefined;
   let cueFallbackTimer: number | undefined;
+
   try {
     const videoIds = await new Promise<string[]>((resolve, reject) => {
       let settled = false;
@@ -171,24 +195,40 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
       });
     });
 
-    const resp = await fetch('/api/youtube/oembed', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoIds }),
-    });
-    const json = (await resp.json()) as {
-      tracks?: TrackItem[];
-      skippedRestricted?: number;
-      problemTracks?: ProblemTrackItem[];
-      error?: string;
-    };
-    if (!resp.ok || !json.tracks) {
-      throw new Error(json.error || 'Could not retrieve song titles from YouTube oEmbed.');
+    // Resolve titles directly on client side in chunks
+    const tracks: TrackItem[] = [];
+    const problemTracks: ProblemTrackItem[] = [];
+
+    // Filter duplicates
+    const uniqueIds = Array.from(new Set(videoIds)).slice(0, 100);
+
+    for (let i = 0; i < uniqueIds.length; i++) {
+      const vid = uniqueIds[i];
+      try {
+        const meta = await fetchYouTubeVideoTitle(vid);
+        tracks.push({
+          id: `yt_${vid}`,
+          title: meta.title.slice(0, 120),
+          artist: meta.author.slice(0, 80),
+          sourceType: 'youtube',
+          sourceId: vid,
+          thumbnailUrl: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+        });
+      } catch {
+        problemTracks.push({
+          position: i + 1,
+          sourceId: vid,
+          title: `Video ID ${vid}`,
+          artist: 'YouTube',
+          reason: 'Could not fetch metadata',
+        });
+      }
     }
+
     return {
-      tracks: json.tracks,
-      skippedRestricted: json.skippedRestricted || 0,
-      problemTracks: json.problemTracks || [],
+      tracks,
+      skippedRestricted: problemTracks.length,
+      problemTracks,
     };
   } finally {
     if (pollTimer !== undefined) window.clearInterval(pollTimer);
@@ -302,187 +342,4 @@ export function YouTubePlayer({
               callbacksRef.current.onTrackEnded?.();
             } else if (event.data === 1) {
               if (Date.now() > programmaticUntilRef.current) {
-                callbacksRef.current.onStateSync?.(true);
-              }
-            } else if (event.data === 2) {
-              if (Date.now() > programmaticUntilRef.current) {
-                callbacksRef.current.onStateSync?.(false);
-              }
-            }
-          },
-          onError: (event) => {
-            if (!active) return;
-            const code = event.data;
-            const msg =
-              code === 101 || code === 150
-                ? 'Embedding disabled by uploader/copyright owner (Error 101/150).'
-                : code === 100
-                  ? 'Video was removed or set to private on YouTube (Error 100).'
-                  : `YouTube player could not play this video (Error ${code}).`;
-            callbacksRef.current.onPlaybackError?.(msg, code);
-          },
-        },
-      });
-    });
-
-    return () => {
-      active = false;
-      try {
-        playerRef.current?.destroy();
-      } catch {
-        // Ignore
-      }
-      playerRef.current = null;
-    };
-  }, []);
-
-  // Poll real song playback (excluding YouTube pre-roll ads) and enforce clipDurationSeconds auto-stop
-  useEffect(() => {
-    if (!ready) return;
-    lastTickRef.current = Date.now();
-
-    const interval = window.setInterval(() => {
-      const now = Date.now();
-      const dt = Math.min(1000, Math.max(0, now - lastTickRef.current));
-      lastTickRef.current = now;
-
-      const player = playerRef.current;
-      if (!player) return;
-
-      let playerState = -1;
-      try {
-        playerState = player.getPlayerState();
-      } catch {
-        return;
-      }
-
-      const { videoId: targetVid, clipDurationSeconds: clipLimit } = statePropsRef.current;
-      const currentLoadedVid = player.getVideoData?.()?.video_id;
-      const isAdPlaying =
-        (playerState === 1 || playerState === 3) &&
-        Boolean(currentLoadedVid) &&
-        Boolean(targetVid) &&
-        currentLoadedVid !== targetVid;
-
-      const playerPlaying = playerState === 1;
-
-      // Count active song seconds ONLY when the real song (not an ad) is playing
-      if (playerPlaying && !isAdPlaying) {
-        songElapsedMsRef.current += dt;
-      }
-
-      const elapsedSeconds = Math.floor(songElapsedMsRef.current / 1000);
-      callbacksRef.current.onPlaybackProgress?.({
-        songElapsedSeconds: elapsedSeconds,
-        isAdPlaying,
-        playerPlaying,
-      });
-
-      if (
-        clipLimit &&
-        clipLimit > 0 &&
-        playerPlaying &&
-        !isAdPlaying &&
-        elapsedSeconds >= clipLimit &&
-        !autoStoppedRef.current
-      ) {
-        autoStoppedRef.current = true;
-        programmaticUntilRef.current = Date.now() + 800;
-        try {
-          player.pauseVideo();
-        } catch {
-          // Ignore
-        }
-        callbacksRef.current.onAutoStop?.();
-      }
-    }, 350);
-
-    return () => window.clearInterval(interval);
-  }, [ready]);
-
-  // Reset elapsed counter if host extends clip limit past already-reached mark
-  useEffect(() => {
-    if (!clipDurationSeconds || Math.floor(songElapsedMsRef.current / 1000) < clipDurationSeconds) {
-      autoStoppedRef.current = false;
-    }
-  }, [clipDurationSeconds]);
-
-  // Explicit host PLAY trigger (helps recover if browser blocked initial autoplay)
-  useEffect(() => {
-    if (playSignal === lastPlaySignalRef.current) return;
-    lastPlaySignalRef.current = playSignal;
-    if (!ready || !playerRef.current || !videoId) return;
-    programmaticUntilRef.current = Date.now() + 700;
-    try {
-      playerRef.current.playVideo();
-    } catch {
-      // Ignore
-    }
-  }, [ready, playSignal, videoId]);
-
-  // Handle explicit host STOP action (stop audio and rewind to 0:00)
-  useEffect(() => {
-    if (stopSignal === lastStopSignalRef.current) return;
-    lastStopSignalRef.current = stopSignal;
-
-    songElapsedMsRef.current = 0;
-    autoStoppedRef.current = false;
-    callbacksRef.current.onPlaybackProgress?.({
-      songElapsedSeconds: 0,
-      isAdPlaying: false,
-      playerPlaying: false,
-    });
-
-    if (!ready || !playerRef.current) return;
-    programmaticUntilRef.current = Date.now() + 800;
-    try {
-      playerRef.current.pauseVideo();
-      playerRef.current.seekTo?.(0, true);
-    } catch {
-      try {
-        playerRef.current.stopVideo();
-      } catch {
-        // Ignore
-      }
-    }
-  }, [ready, stopSignal]);
-
-  // Handle song changes and play/pause synchronization
-  useEffect(() => {
-    if (!ready || !playerRef.current || !videoId) return;
-    programmaticUntilRef.current = Date.now() + 700;
-
-    if (loadedVideoRef.current !== videoId) {
-      loadedVideoRef.current = videoId;
-      songElapsedMsRef.current = 0;
-      autoStoppedRef.current = false;
-      callbacksRef.current.onPlaybackProgress?.({
-        songElapsedSeconds: 0,
-        isAdPlaying: false,
-        playerPlaying: isPlaying,
-      });
-      if (isPlaying) {
-        playerRef.current.loadVideoById(videoId);
-      } else {
-        playerRef.current.cueVideoById(videoId);
-      }
-    } else if (isPlaying) {
-      playerRef.current.playVideo();
-    } else {
-      playerRef.current.pauseVideo();
-    }
-  }, [ready, videoId, isPlaying]);
-
-  return (
-    <div className="space-y-2">
-      <div
-        ref={containerRef}
-        className="w-full overflow-hidden rounded-xl border border-white/10 bg-black aspect-video max-h-[220px]"
-      />
-      <p className="text-xs text-slate-400">
-        {caption ??
-          "Audio plays through the host's device via the official YouTube player. If a video plays an ad first, the 40–50s song timer waits until the actual music begins."}
-      </p>
-    </div>
-  );
-}
+                callbacks
