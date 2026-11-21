@@ -778,4 +778,74 @@ function MusicalHousieApp() {
 
       {isInteractiveGameFlow && bootError && isFirebaseConfigured && !isOffline && (
         <div className="mx-auto mt-6 max-w-3xl px-4 w-full">
-          <div className="rounded-2xl border border-rose-400/40 bg-rose-500/15 px-4 py-3 text-sm text-rose-200 flex items-center justify-between gap-3
+          <div className="rounded-2xl border border-rose-400/40 bg-rose-500/15 px-4 py-3 text-sm text-rose-200 flex items-center justify-between gap-3">
+            <span>{bootError}</span>
+            <button
+              type="button"
+              onClick={() => initializeBackend({ isReconnect: true })}
+              className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white shrink-0 cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1">
+        {inActiveRoom && booting ? (
+          <div className="mx-auto max-w-3xl px-4 py-24 flex items-center justify-center gap-3 text-slate-300">
+            <Loader2 className="h-5 w-5 animate-spin text-amber-400" />
+            <span>Connecting to Dhiren Pathak Present Musical Housie...</span>
+          </div>
+        ) : (
+          <Suspense fallback={<ScreenSuspenseFallback />}>
+            {screen === 'home' && (
+              <HomeView
+                savedSession={savedSession}
+                onHostClick={() => navigateTo('host-create')}
+                onJoinClick={() => navigateTo('join')}
+                onHowToPlayClick={() => navigateTo('how-to-play')}
+                onResumeSession={handleResumeSession}
+              />
+            )}
+
+            {screen === 'host-create' && (
+              <HostCreateView
+                onBack={() => navigateTo('home')}
+                onCreateGame={handleCreateGame}
+              />
+            )}
+
+            {screen === 'join' && (
+              <JoinRoomView
+                initialRoomCode={inviteRoomCode}
+                onBack={() => navigateTo('home', { inviteCode: '' })}
+                onJoinGame={handleJoinGame}
+              />
+            )}
+
+            {screen === 'how-to-play' && (
+              <HowToPlayView
+                onBack={() => navigateTo('home')}
+                onHostClick={() => navigateTo('host-create')}
+                onJoinClick={() => navigateTo('join')}
+              />
+            )}
+
+            {screen === 'about' && (
+              <AboutView
+                onBack={() => navigateTo('home')}
+                onHostClick={() => navigateTo('host-create')}
+                onJoinClick={() => navigateTo('join')}
+              />
+            )}
+
+            {screen === 'contact' && (
+              <ContactView onBack={() => navigateTo('home')} />
+            )}
+
+            {screen === 'privacy-policy' && (
+              <PrivacyPolicyView onBack={() => navigateTo('home')} />
+            )}
+
+            {screen === '
