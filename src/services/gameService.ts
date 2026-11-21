@@ -19,7 +19,9 @@ import {
   buildTrackSongNumberMap,
   generateRoomCode,
   generateUniqueTicketsForLatePlayers,
+  generateUniqueTicket,
   shuffleArray,
+  verifyClaimAgainstPlayedSongs,
 } from '../shared/gameLogic.ts';
 import {
   ALL_PATTERNS,
@@ -115,22 +117,42 @@ export async function fetchRoomEntryStatus(rawRoomCode: string): Promise<RoomEnt
     throw new Error('Invalid Ticket Code. Please Check and Try Again.');
   }
 
-  const user = await requireAuthenticatedUser();
-  const idToken = await user.getIdToken();
-
-  const resp = await fetch(`/api/game/room-entry-status/${encodeURIComponent(roomCode)}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${idToken}`,
-    },
-    cache: 'no-store',
-  });
-
-  const data = (await resp.json()) as RoomEntryStatusInfo & { ok?: boolean; error?: string };
-  if (!resp.ok || !data.ok) {
-    throw new Error(data.error || 'Unable to verify room status right now.');
+  // Directly check Firestore room on client side without backend API
+  const roomRef = doc(db, 'rooms', roomCode);
+  const roomSnap = await getDoc(roomRef);
+  if (!roomSnap.exists()) {
+    return {
+      exists: false,
+      roomCode,
+      serverNowMs: Date.now(),
+      lateEntryOpen: false,
+    };
   }
-  return data;
+
+  const room = roomSnap.data() as RoomData;
+  const startedMs =
+    room.startedAt && typeof (room.startedAt as Timestamp).toMillis === 'function'
+      ? (room.startedAt as Timestamp).toMillis()
+      : null;
+
+  const now = Date.now();
+  const deadlineMs = startedMs ? startedMs + LATE_ENTRY_GRACE_MS : null;
+  const lateEntryOpen =
+    room.status === 'lobby' || (startedMs !== null && now < startedMs + LATE_ENTRY_GRACE_MS);
+
+  return {
+    exists: true,
+    roomCode,
+    status: room.status,
+    isHost: auth?.currentUser?.uid === room.hostUid,
+    startedAtMs: startedMs,
+    deadlineMs,
+    serverNowMs: now,
+    remainingMs: deadlineMs ? Math.max(0, deadlineMs - now) : 0,
+    lateEntryOpen,
+    playerCount: room.playerCount || 0,
+    gameName: room.gameName,
+  };
 }
 
 const SESSION_KEY = 'musical_housie_session_v1';
@@ -294,7 +316,7 @@ export async function cleanupExpiredOrEndedHostedRooms(options?: {
         if (deleted) deletedCount++;
       }
     } catch {
-      // Skip non-fatal cleanup errors so callers can continue
+      // Skip non-fatal cleanup errors
     }
   }
   return deletedCount;
@@ -343,7 +365,6 @@ export async function createGameRoom(
     throw new Error('Please enter your Host Name.');
   }
 
-  // Free database space by removing ended, expired, or abandoned previous rooms from this host
   await cleanupExpiredOrEndedHostedRooms().catch(() => {});
 
   let roomCode = '';
@@ -356,7 +377,6 @@ export async function createGameRoom(
         roomCode = candidate;
         break;
       }
-      // If expired, host cannot overwrite someone else's doc; try another code
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, `rooms/${candidate}`);
     }
@@ -480,7 +500,6 @@ export async function joinGameRoom(
     throw new Error(`Room ${roomCode} has expired. Ask the host to create a fresh game.`);
   }
 
-  // If the current browser user IS the host rejoining their own room
   if (room.hostUid === user.uid) {
     saveLocalSession({ roomCode, role: 'host', name: room.hostName });
     return { roomCode, role: 'host' };
@@ -495,7 +514,6 @@ export async function joinGameRoom(
   }
 
   if (playerSnap.exists()) {
-    // Existing registered player reconnecting (never restricted by the 15-minute late entry cutoff)
     if (room.status !== 'ended') {
       try {
         const updates: Record<string, unknown> = {
@@ -519,19 +537,11 @@ export async function joinGameRoom(
   }
 
   if (room.status !== 'lobby') {
-    // Validate 15-minute late entry window strictly against server-side time
-    let lateEntryAllowed = false;
-    try {
-      const entryStatus = await fetchRoomEntryStatus(roomCode);
-      lateEntryAllowed = Boolean(entryStatus.exists && entryStatus.lateEntryOpen);
-    } catch {
-      // Fallback check using room.startedAt; Firestore security rules still strictly enforce server time
-      const startedMs =
-        room.startedAt && typeof (room.startedAt as Timestamp).toMillis === 'function'
-          ? (room.startedAt as Timestamp).toMillis()
-          : null;
-      lateEntryAllowed = startedMs !== null && Date.now() < startedMs + LATE_ENTRY_GRACE_MS;
-    }
+    const startedMs =
+      room.startedAt && typeof (room.startedAt as Timestamp).toMillis === 'function'
+        ? (room.startedAt as Timestamp).toMillis()
+        : null;
+    const lateEntryAllowed = startedMs !== null && Date.now() < startedMs + LATE_ENTRY_GRACE_MS;
 
     if (!lateEntryAllowed) {
       throw new Error('Game Started – Late Entry Closed. You can no longer join this game.');
@@ -725,7 +735,7 @@ export async function startGameAndDealTickets(params: {
     throw new Error('Select at least 1 winning pattern before starting.');
   }
 
-  // Deterministic player ordering by join timestamp so ticket numbers are stable
+  // Deterministic player ordering
   const orderedPlayers = [...players].sort((a, b) => {
     const aMs =
       a.joinedAt && typeof (a.joinedAt as Timestamp).toMillis === 'function'
@@ -738,23 +748,29 @@ export async function startGameAndDealTickets(params: {
     return aMs - bMs || a.uid.localeCompare(b.uid);
   });
 
-  // Generate unique 3x5 tickets and sequential ticket numbers on the server
-  const ticketResp = await fetch('/api/game/generate-tickets', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      tracks,
-      playerUids: orderedPlayers.map((p) => p.uid),
-    }),
+  // Client-side ticket generation for GitHub Pages
+  const existingAssignedTickets: TicketCell[][] = [];
+  const ticketsByPlayer: Record<string, TicketCell[]> = {};
+  const ticketNumbersByPlayer: Record<string, number> = {};
+
+  orderedPlayers.forEach((player, idx) => {
+    let ticket: TicketCell[] = [];
+    if (typeof generateUniqueTicket === 'function') {
+      ticket = generateUniqueTicket(tracks, existingAssignedTickets);
+    } else {
+      const shuffledTracks = shuffleArray(tracks).slice(0, 15);
+      ticket = shuffledTracks.map((t, cellIdx) => ({
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        sourceId: t.sourceId,
+        position: cellIdx,
+      }));
+    }
+    existingAssignedTickets.push(ticket);
+    ticketsByPlayer[player.uid] = ticket;
+    ticketNumbersByPlayer[player.uid] = idx + 1;
   });
-  const ticketJson = (await ticketResp.json()) as {
-    ticketsByPlayer?: Record<string, TicketCell[]>;
-    ticketNumbersByPlayer?: Record<string, number>;
-    error?: string;
-  };
-  if (!ticketResp.ok || !ticketJson.ticketsByPlayer) {
-    throw new Error(ticketJson.error || 'Failed to generate player tickets.');
-  }
 
   const orderedTracks = randomMode ? shuffleArray(tracks) : [...tracks];
   const queueOrder = orderedTracks.map((t) => t.id);
@@ -762,19 +778,16 @@ export async function startGameAndDealTickets(params: {
   const initialPlayedIds = firstSongId ? [firstSongId] : [];
   const initialPlayedNumbers = derivePlayedSongNumbers(initialPlayedIds, tracks);
 
-  // Validate all player tickets first before committing to Firestore
-  const ticketAssignments = orderedPlayers.map((player, index) => {
-    const assignedTicket = ticketJson.ticketsByPlayer![player.uid];
+  const ticketAssignments = orderedPlayers.map((player) => {
+    const assignedTicket = ticketsByPlayer[player.uid];
     if (!assignedTicket || assignedTicket.length !== 15) {
       throw new Error(`Failed to allocate 15-song ticket for ${player.name}.`);
     }
-    const ticketNumber = ticketJson.ticketNumbersByPlayer?.[player.uid] ?? index + 1;
+    const ticketNumber = ticketNumbersByPlayer[player.uid];
     return { player, assignedTicket, ticketNumber };
   });
 
   try {
-    // Chunk player ticket writes in batches of 400 so sessions with hundreds/thousands of players
-    // never exceed Firestore's 500-operation writeBatch limit.
     const BATCH_LIMIT = 400;
     for (let i = 0; i < ticketAssignments.length; i += BATCH_LIMIT) {
       const chunk = ticketAssignments.slice(i, i + BATCH_LIMIT);
@@ -839,7 +852,6 @@ export async function dealLatePlayerTickets(params: {
     return 0;
   }
 
-  // Deterministic ordering so late players receive sequential ticket numbers
   const sortedLatePlayers = [...eligibleLatePlayers].sort((a, b) => {
     const aMs =
       a.joinedAt && typeof (a.joinedAt as Timestamp).toMillis === 'function'
@@ -965,7 +977,6 @@ export async function advanceToNextSong(
   const currentIdx = room.currentSongNumber - 1;
   const currentTrack = secret.tracks.find((t) => t.id === secret.currentSongId) || null;
 
-  // Add the finished previous song to revealedSongs so players can review past songs
   const nextRevealedSongs: RevealedSong[] = [...(room.revealedSongs || [])];
   if (currentTrack && !nextRevealedSongs.some((s) => s.id === currentTrack.id)) {
     nextRevealedSongs.push({
@@ -982,7 +993,6 @@ export async function advanceToNextSong(
 
   const nextIdx = currentIdx + 1;
   if (nextIdx >= secret.queueOrder.length) {
-    // Playlist exhausted
     const finalPlayedIds =
       currentTrack && !basePlayedIds.includes(currentTrack.id)
         ? [...basePlayedIds, currentTrack.id].slice(0, 200)
@@ -1011,7 +1021,6 @@ export async function advanceToNextSong(
 
   const nextSongId = secret.queueOrder[nextIdx];
   const nextTrack = secret.tracks.find((t) => t.id === nextSongId) || null;
-  // Deduplicate playedSongIds so duplicate announcements never corrupt state
   const updatedPlayedIds = basePlayedIds.includes(nextSongId)
     ? basePlayedIds
     : [...basePlayedIds, nextSongId].slice(0, 200);
@@ -1175,7 +1184,6 @@ export async function submitWinnerClaim(
     throw new Error(`${PATTERN_LABELS[pattern]} is not enabled in this game.`);
   }
 
-  // Enforce unique player + pattern per game session: reject if this player already won this pattern
   const winnerId = `${pattern}_${player.uid}`;
   const winnerRef = doc(db, 'rooms', room.roomCode, 'winners', winnerId);
   let winnerSnap;
@@ -1215,7 +1223,6 @@ export async function submitWinnerClaim(
     if (existing.status === 'approved') {
       throw new Error(`You have already won ${PATTERN_LABELS[pattern]} in this game.`);
     }
-    // Rejected previously -> allow clean resubmission
     try {
       await updateDoc(claimRef, {
         status: 'pending',
@@ -1224,7 +1231,7 @@ export async function submitWinnerClaim(
         ticketSnapshot: player.ticket,
         claimedAtMs,
         verifiedMatchedIds: [],
-        verificationSummary: 'Verifying claim against official played songs on server...',
+        verificationSummary: 'Verifying claim against official played songs...',
         updatedAt: serverTimestamp(),
       });
       return;
@@ -1247,7 +1254,7 @@ export async function submitWinnerClaim(
       claimedAtMs,
       status: 'pending',
       verifiedMatchedIds: [],
-      verificationSummary: 'Verifying claim against official played songs on server...',
+      verificationSummary: 'Verifying claim against official played songs...',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -1256,36 +1263,36 @@ export async function submitWinnerClaim(
   }
 }
 
+// Client-side verification without calling non-existent /api/ endpoints
 export async function verifyClaimOnServer(
   roomCode: string,
   claimId: string,
 ): Promise<ClaimVerificationResult> {
-  const user = await requireAuthenticatedUser();
-  const idToken = await user.getIdToken();
+  const claimRef = doc(db, 'rooms', roomCode, 'claims', claimId);
+  const secretRef = doc(db, 'rooms', roomCode, 'hostState', 'secret');
 
-  const resp = await fetch('/api/game/verify-claim', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${idToken}`,
-    },
-    body: JSON.stringify({ roomCode, claimId }),
-  });
+  const [claimSnap, secretSnap] = await Promise.all([getDoc(claimRef), getDoc(secretRef)]);
 
-  const data = (await resp.json()) as {
-    ok?: boolean;
-    verification?: ClaimVerificationResult;
-    ticketNumber?: number;
-    serverProcessedAtMs?: number;
-    error?: string;
-  };
-  if (!resp.ok || !data.verification) {
-    throw new Error(data.error || 'Server verification failed.');
+  if (!claimSnap.exists()) {
+    throw new Error('Claim record not found.');
   }
+
+  const claim = claimSnap.data() as WinnerClaim;
+  const playedSongIds = secretSnap.exists()
+    ? (secretSnap.data() as HostSecretState).playedSongIds || []
+    : [];
+
+  const verification = verifyClaimAgainstPlayedSongs(
+    claim.ticketSnapshot,
+    claim.claimedSongIds,
+    playedSongIds,
+    claim.pattern,
+  );
+
   return {
-    ...data.verification,
-    ticketNumber: data.ticketNumber ?? data.verification.ticketNumber,
-    serverProcessedAtMs: data.serverProcessedAtMs ?? data.verification.serverProcessedAtMs,
+    ...verification,
+    ticketNumber: claim.ticketNumber,
+    serverProcessedAtMs: Date.now(),
   };
 }
 
@@ -1327,7 +1334,6 @@ export async function resolveWinnerClaim(params: {
         return;
       }
 
-      // Enforce unique (gameSessionId + patternId + playerId) constraint
       if (winnerSnap.exists()) {
         tx.update(claimRef, {
           status: 'rejected',
