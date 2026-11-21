@@ -848,4 +848,132 @@ function MusicalHousieApp() {
               <PrivacyPolicyView onBack={() => navigateTo('home')} />
             )}
 
-            {screen === '
+            {screen === 'terms' && (
+              <TermsView onBack={() => navigateTo('home')} />
+            )}
+
+            {screen === 'host-room' && activeRoomCode && uid && (
+              <HostGameView
+                roomCode={activeRoomCode}
+                hostUid={uid}
+                onExitRoom={handleLeaveRoom}
+              />
+            )}
+
+            {screen === 'player-room' && activeRoomCode && uid && (
+              <PlayerGameView
+                roomCode={activeRoomCode}
+                playerUid={uid}
+                onExitRoom={handleLeaveRoom}
+                suppressOfflineBanner
+              />
+            )}
+
+            {screen === 'dev-analytics' && (
+              <DeveloperAnalyticsView onBack={() => navigateTo('home')} />
+            )}
+          </Suspense>
+        )}
+      </div>
+
+      {!inActiveRoom ? (
+        <footer className="no-print border-t border-white/10 py-6 px-4 sm:px-6 text-xs text-slate-400">
+          <div className="mx-auto max-w-6xl flex flex-col lg:flex-row items-center justify-between gap-4">
+            <div className="flex flex-col sm:flex-row items-center gap-3 text-center sm:text-left">
+              <span>Dhiren Pathak Present Musical Housie · Casual multiplayer music bingo</span>
+              <VisitorCounter />
+            </div>
+            <nav aria-label="Footer navigation" className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+              <a
+                href={`${BASE_URL_PATH}/`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('home');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                Home
+              </a>
+              <a
+                href={`${BASE_URL_PATH}/how-to-play`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('how-to-play');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                How to Play
+              </a>
+              <a
+                href={`${BASE_URL_PATH}/about`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('about');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                About Us
+              </a>
+              <a
+                href={`${BASE_URL_PATH}/contact`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('contact');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                Contact Us
+              </a>
+              <a
+                href={`${BASE_URL_PATH}/privacy-policy`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('privacy-policy');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                Privacy Policy
+              </a>
+              <a
+                href={`${BASE_URL_PATH}/terms`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('terms');
+                }}
+                className="hover:text-white transition-colors"
+              >
+                Terms & Conditions
+              </a>
+              <button
+                type="button"
+                onClick={openSetupModal}
+                className="hover:text-white transition-colors cursor-pointer"
+              >
+                Setup Guide
+              </button>
+            </nav>
+          </div>
+        </footer>
+      ) : (
+        <footer className="no-print border-t border-white/10 py-3 px-4 sm:px-6 text-xs text-slate-400">
+          <div className="mx-auto max-w-6xl flex flex-wrap items-center justify-between gap-3">
+            <span>Dhiren Pathak Present Musical Housie</span>
+            <VisitorCounter compact />
+          </div>
+        </footer>
+      )}
+
+      {setupModalOpen && (
+        <Suspense fallback={null}>
+          <SetupGuideModal
+            open={setupModalOpen}
+            onClose={closeSetupModal}
+            needsAnonymousAuthSetup={needsAnonymousAuthSetup}
+            onRetryAuth={() => initializeBackend({ isReconnect: true })}
+            onGoogleFallback={handleGoogleFallback}
+          />
+        </Suspense>
+      )}
+    </div>
+  );
+}
