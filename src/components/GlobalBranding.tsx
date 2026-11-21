@@ -1,4 +1,4 @@
-export const PRESENTER_PORTRAIT_SRC = '/assets/aistudio/Screenshot_2025-10-17_100636_78a1ec3b.png';
+export const PRESENTER_PORTRAIT_SRC = `${import.meta.env.BASE_URL}dp.png`;
 export const BRAND_TEXT = 'Dhiren Pathak Present Musical Housie';
 
 interface GlobalBrandingProps {
