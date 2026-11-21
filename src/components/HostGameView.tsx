@@ -407,11 +407,13 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
     return players.find((p) => p.uid === viewingTicketPlayerUid) || null;
   }, [players, viewingTicketPlayerUid]);
 
+  // Base path logic for GitHub Pages
+  const BASE_PATH = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const sharedOrigin = currentOrigin.replace('://ais-dev-', '://ais-pre-');
   const hasSeparateSharedOrigin = Boolean(currentOrigin && sharedOrigin !== currentOrigin);
-  const inviteUrl = currentOrigin ? `${currentOrigin}/?room=${roomCode}` : '';
-  const sharedInviteUrl = sharedOrigin ? `${sharedOrigin}/?room=${roomCode}` : '';
+  const inviteUrl = currentOrigin ? `${currentOrigin}${BASE_PATH}/?room=${roomCode}` : '';
+  const sharedInviteUrl = sharedOrigin ? `${sharedOrigin}${BASE_PATH}/?room=${roomCode}` : '';
   const qrInviteUrl =
     hasSeparateSharedOrigin && qrUseSharedOrigin ? sharedInviteUrl : inviteUrl;
 
@@ -945,7 +947,7 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
                   ) : (
                     <>
                       <Play className="h-5 w-5 fill-slate-950" />
-                      <span>START GAME &amp; DEAL TICKETS</span>
+                      <span>START GAME & DEAL TICKETS</span>
                     </>
                   )}
                 </button>
@@ -1279,7 +1281,7 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
                 <div className="rounded-2xl border border-white/10 bg-[#090D1C] p-5 text-center space-y-3">
                   <p className="font-display text-lg font-bold text-white">Game Ended</p>
                   <p className="text-xs text-slate-400">
-                    When players have finished viewing winners, close &amp; delete this room to free Firebase database space.
+                    When players have finished viewing winners, close & delete this room to free Firebase database space.
                   </p>
                   <div className="flex flex-wrap items-center justify-center gap-2.5">
                     <button
@@ -1289,7 +1291,7 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
                       className="inline-flex items-center gap-2 rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-bold text-slate-950 hover:bg-amber-300 disabled:opacity-50 cursor-pointer"
                     >
                       <Trash2 className="h-4 w-4" />
-                      <span>Close &amp; Free Database</span>
+                      <span>Close & Free Database</span>
                     </button>
                     <button
                       type="button"
@@ -1578,7 +1580,7 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
                   )}
                 </div>
                 <p className="text-xs text-rose-100/90">
-                  Remove these videos from your YouTube playlist after the game so they don&apos;t interrupt future rounds:
+                  Remove these videos from your YouTube playlist after the game so they don't interrupt future rounds:
                 </p>
                 <div className="divide-y divide-rose-300/15 max-h-44 overflow-y-auto pr-1">
                   {playbackProblems.map((prob) => (
