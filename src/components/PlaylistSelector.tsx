@@ -62,56 +62,65 @@ export function PlaylistSelector({
 
     setLoading(true);
     try {
-      const headers = await authHeaders();
-      const resp = await fetch('/api/youtube/playlist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify({ playlistUrl: rawInput, roomCode }),
-      });
-      const json = (await resp.json()) as {
-        ok?: boolean;
-        code?: string;
-        playlistId?: string;
-        canonicalUrl?: string;
-        playlistName?: string;
-        tracks?: TrackItem[];
-        problemTracks?: ProblemTrackItem[];
-        skippedRestricted?: number;
-        error?: string;
-      };
-
-      const resolvedPlaylistId = json.playlistId || localPlaylistId || '';
-      const canonicalPlaylistUrl =
-        json.canonicalUrl ||
-        (resolvedPlaylistId ? normalizeYouTubePlaylistUrl(resolvedPlaylistId) : rawInput.slice(0, 300));
-
       let resolvedTracks: TrackItem[] = [];
-      let detectedProblems: ProblemTrackItem[] = json.problemTracks || [];
-      const playlistName = json.playlistName || 'YouTube Playlist';
-      let skipped = json.skippedRestricted || detectedProblems.length;
+      let detectedProblems: ProblemTrackItem[] = [];
+      let playlistName = 'YouTube Playlist';
+      let skipped = 0;
+      let resolvedPlaylistId = localPlaylistId || '';
 
-      if (
-        (json.code === 'YOUTUBE_IFRAME_FALLBACK' || json.code === 'YOUTUBE_API_KEY_MISSING') &&
-        resolvedPlaylistId
-      ) {
+      let backendSucceeded = false;
+
+      // 1. First try calling the server API if present (works in Google AI Studio)
+      try {
+        const headers = await authHeaders();
+        const resp = await fetch('/api/youtube/playlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({ playlistUrl: rawInput, roomCode }),
+        });
+
+        const contentType = resp.headers.get('content-type') || '';
+        if (resp.ok && contentType.includes('application/json')) {
+          const json = await resp.json();
+          if (json.ok && json.tracks && json.tracks.length > 0) {
+            resolvedTracks = json.tracks;
+            resolvedPlaylistId = json.playlistId || resolvedPlaylistId;
+            playlistName = json.playlistName || playlistName;
+            detectedProblems = json.problemTracks || [];
+            skipped = json.skippedRestricted || detectedProblems.length;
+            backendSucceeded = true;
+          }
+        }
+      } catch {
+        // Backend API missing or returned non-JSON (expected on GitHub Pages)
+        backendSucceeded = false;
+      }
+
+      // 2. Client-side fallback: Use YouTube IFrame directly (works on GitHub Pages without server)
+      if (!backendSucceeded) {
+        if (!resolvedPlaylistId) {
+          throw new Error('Please enter a valid YouTube Playlist URL containing a list ID.');
+        }
+
         const iframeResult = await resolvePlaylistViaYouTubeIFrame(resolvedPlaylistId);
+        if (!iframeResult.tracks || iframeResult.tracks.length === 0) {
+          throw new Error('Could not load songs from this playlist via browser player. Ensure the playlist is Public or Unlisted.');
+        }
         resolvedTracks = iframeResult.tracks;
         detectedProblems = iframeResult.problemTracks || [];
         skipped = iframeResult.skippedRestricted || detectedProblems.length;
-      } else if (!resp.ok || !json.tracks) {
-        if (detectedProblems.length > 0) {
-          setProblemTracks(detectedProblems);
-        }
-        throw new Error(json.error || 'Could not load YouTube playlist.');
-      } else {
-        resolvedTracks = json.tracks;
+        playlistName = 'YouTube Playlist';
       }
+
+      const canonicalPlaylistUrl = resolvedPlaylistId
+        ? normalizeYouTubePlaylistUrl(resolvedPlaylistId)
+        : rawInput.slice(0, 300);
 
       setProblemTracks(detectedProblems);
 
       if (skipped > 0) {
         setWarning(
-          `${skipped} problem video(s) cannot be played in the app and were excluded. See the list below to remove them from your YouTube playlist.`,
+          `${skipped} problem video(s) cannot be played in the app and were excluded.`,
         );
       }
 
@@ -198,7 +207,7 @@ export function PlaylistSelector({
             {loading ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Checking &amp; Loading...</span>
+                <span>Checking & Loading...</span>
               </>
             ) : (
               <span>Load Playlist</span>
@@ -247,7 +256,7 @@ export function PlaylistSelector({
             )}
           </div>
           <p className="text-xs text-rose-100/90">
-            These songs were automatically excluded because YouTube will not play them here. Remove them from your YouTube playlist to clean up future games:
+            These songs were automatically excluded because YouTube will not play them here.
           </p>
           <div className="max-h-48 overflow-y-auto divide-y divide-rose-300/15 pr-1">
             {problemTracks.map((item, idx) => (
