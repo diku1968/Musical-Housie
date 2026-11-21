@@ -157,4 +157,26 @@ const PAGE_METADATA: Record<AppScreen, { title: string; description: string; can
   'host-create': {
     title: 'Host a Game — Dhiren Pathak Present Musical Housie',
     description: 'Create a 6-character Musical Housie room and invite friends and family to play.',
-    canonicalPath:
+    canonicalPath: '/host-create',
+  },
+  join: {
+    title: 'Join a Game — Dhiren Pathak Present Musical Housie',
+    description: 'Enter a 6-character room code to join a live Musical Housie multiplayer room.',
+    canonicalPath: '/join',
+  },
+  'host-room': {
+    title: 'Host Dashboard — Dhiren Pathak Present Musical Housie',
+    description: 'Live host room for managing Musical Housie playlists, songs, and winner verification.',
+    canonicalPath: '/host-room',
+  },
+  'player-room': {
+    title: 'Live Ticket Room — Dhiren Pathak Present Musical Housie',
+    description: 'Live player ticket and song matching view for Musical Housie.',
+    canonicalPath: '/player-room',
+  },
+  'dev-analytics': {
+    title: 'Developer Analytics — Musical Housie',
+    description: 'Restricted developer analytics dashboard.',
+    canonicalPath: '/dev-analytics',
+  },
+};
