@@ -2,8 +2,8 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-display: 'Bricolage Grotesque', system-ui, sans-serif;
-  --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Noto Sans Gujarati', system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', 'Noto Sans Gujarati', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 }
 
@@ -51,7 +51,13 @@
   }
 }
 
-/* Print Facility: Print only the selected 3x5 Musical Housie ticket with played highlights preserved */
+/* Gujarati Unicode & traditional ticket typography polish */
+.housie-song-text {
+  font-family: 'Noto Sans Gujarati', 'Plus Jakarta Sans', system-ui, sans-serif;
+  overflow-wrap: anywhere;
+}
+
+/* Print Facility: Supports BOTH Existing Ticket (original print layout) and New Ticket Design (traditional printed card) */
 @media print {
   @page {
     size: landscape;
@@ -113,6 +119,7 @@
     box-shadow: none !important;
   }
 
+  /* Original Existing Ticket Print Styles (preserved unchanged) */
   .print-only-brand {
     display: block !important;
     color: #334155 !important;
@@ -241,6 +248,88 @@
 
   .ticket-status-unplayed {
     color: #64748b !important;
+  }
+
+  /* Scoped Print Styles for New Ticket Design (Traditional Landscape 3x5 Card) */
+  .print-traditional-mode {
+    padding: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+  }
+
+  .traditional-ticket-scroll {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .traditional-housie-card {
+    min-width: 0 !important;
+    width: 100% !important;
+    background-color: #fdf8ec !important;
+    border: 3px solid #9c6b2f !important;
+    color: #3b1b54 !important;
+    box-shadow: none !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .traditional-housie-inner {
+    background-color: #fffdf7 !important;
+    border: 1px solid #c9a25b !important;
+  }
+
+  .traditional-housie-presenter {
+    color: #6b3f7d !important;
+  }
+
+  .traditional-housie-heading {
+    color: #3b1b54 !important;
+  }
+
+  .traditional-housie-grid {
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    grid-template-rows: repeat(3, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  .traditional-song-cell {
+    height: 98px !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .traditional-cell-played {
+    background-color: #dcfce7 !important;
+    border: 1.5px solid #16a34a !important;
+    color: #14532d !important;
+    box-shadow: none !important;
+  }
+
+  .traditional-cell-unplayed {
+    background-color: #ffffff !important;
+    border: 1.5px solid #c9a25b !important;
+    color: #3b1b54 !important;
+    box-shadow: none !important;
+  }
+
+  .traditional-played-badge {
+    background-color: #16a34a !important;
+    color: #ffffff !important;
+  }
+
+  .traditional-song-title {
+    color: #3b1b54 !important;
+  }
+
+  .traditional-cell-played .traditional-song-title {
+    color: #14532d !important;
+  }
+
+  .traditional-housie-footer {
+    color: #5a2d74 !important;
+    border-top-color: #d4af6a !important;
   }
 }
 

@@ -191,6 +191,94 @@ export function generateUniqueTickets(
   return ticketsByPlayer;
 }
 
+export const LATE_ENTRY_GRACE_MS = 15 * 60 * 1000;
+
+export function formatCountdownMmSs(remainingMs: number): string {
+  const clampedSec = Math.max(0, Math.ceil(remainingMs / 1000));
+  const mins = Math.floor(clampedSec / 60);
+  const secs = clampedSec % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+export function generateUniqueTicketsForLatePlayers(
+  tracks: TrackItem[],
+  latePlayerUids: string[],
+  existingTickets: readonly TicketCell[][],
+): Record<string, TicketCell[]> {
+  if (tracks.length < 15) {
+    throw new Error(
+      `At least 15 accessible songs are required to generate 3x5 tickets (found ${tracks.length}).`,
+    );
+  }
+
+  const uniqueMap = new Map<string, TrackItem>();
+  for (const track of tracks) {
+    if (!uniqueMap.has(track.id)) {
+      uniqueMap.set(track.id, track);
+    }
+  }
+  const uniqueTracks = Array.from(uniqueMap.values());
+  if (uniqueTracks.length < 15) {
+    throw new Error(
+      `At least 15 unique songs are required to generate tickets (found ${uniqueTracks.length} unique songs).`,
+    );
+  }
+
+  const songNumberById = buildTrackSongNumberMap(uniqueTracks);
+  const ticketsByPlayer: Record<string, TicketCell[]> = {};
+  const seenSignatures = new Set<string>();
+  const seenOrderSignatures = new Set<string>();
+
+  for (const ticket of existingTickets) {
+    if (ticket.length !== 15) continue;
+    seenSignatures.add(
+      ticket
+        .map((c) => c.id)
+        .sort()
+        .join('|'),
+    );
+    seenOrderSignatures.add(ticket.map((c) => c.id).join('|'));
+  }
+
+  for (const uid of latePlayerUids) {
+    let chosen: TrackItem[] = [];
+    for (let attempt = 0; attempt < 250; attempt++) {
+      const candidate = shuffleArray(uniqueTracks).slice(0, 15);
+      const setSig = candidate
+        .map((t) => t.id)
+        .sort()
+        .join('|');
+      const orderSig = candidate.map((t) => t.id).join('|');
+
+      if (uniqueTracks.length >= 16) {
+        if (!seenSignatures.has(setSig)) {
+          chosen = candidate;
+          seenSignatures.add(setSig);
+          seenOrderSignatures.add(orderSig);
+          break;
+        }
+      } else if (!seenOrderSignatures.has(orderSig)) {
+        chosen = candidate;
+        seenOrderSignatures.add(orderSig);
+        break;
+      }
+
+      if (attempt === 249) {
+        chosen = candidate;
+      }
+    }
+
+    ticketsByPlayer[uid] = chosen.map((t) => ({
+      id: t.id,
+      title: t.title.slice(0, 120),
+      artist: t.artist.slice(0, 80),
+      songNumber: songNumberById.get(t.id),
+    }));
+  }
+
+  return ticketsByPlayer;
+}
+
 export function getPatternIndices(pattern: WinningPattern): number[] {
   switch (pattern) {
     case 'top_row':

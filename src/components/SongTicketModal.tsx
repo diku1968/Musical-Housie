@@ -1,9 +1,12 @@
 import { Check, Printer, X } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { formatTicketNumber } from '../shared/gameLogic.ts';
 import { RoomStatus, TicketCell } from '../shared/types.ts';
 import { GlobalBranding } from './GlobalBranding.tsx';
 import { HousieTicket } from './HousieTicket.tsx';
+import { TraditionalHousieTicket } from './TraditionalHousieTicket.tsx';
+
+export type TicketViewMode = 'existing' | 'new';
 
 interface SongTicketModalProps {
   open: boolean;
@@ -11,6 +14,7 @@ interface SongTicketModalProps {
   playerName: string;
   ticketNumber: number;
   roomCode: string;
+  presenterName?: string;
   gameName?: string;
   ticket: TicketCell[];
   markedSongIds: string[];
@@ -18,6 +22,7 @@ interface SongTicketModalProps {
   playedSongNumbers?: number[];
   activeSongId?: string;
   roomStatus?: RoomStatus;
+  initialViewMode?: TicketViewMode;
   autoPrintOnOpen?: boolean;
   onAutoPrintHandled?: () => void;
 }
@@ -28,6 +33,7 @@ export function SongTicketModal({
   playerName,
   ticketNumber,
   roomCode,
+  presenterName,
   gameName,
   ticket,
   markedSongIds,
@@ -35,9 +41,18 @@ export function SongTicketModal({
   playedSongNumbers = [],
   activeSongId = '',
   roomStatus,
+  initialViewMode = 'existing',
   autoPrintOnOpen = false,
   onAutoPrintHandled,
 }: SongTicketModalProps) {
+  const [viewMode, setViewMode] = useState<TicketViewMode>(initialViewMode);
+
+  useEffect(() => {
+    if (open) {
+      setViewMode(initialViewMode);
+    }
+  }, [open, initialViewMode]);
+
   useEffect(() => {
     if (!open || !autoPrintOnOpen) return;
     const timer = window.setTimeout(() => {
@@ -75,6 +90,8 @@ export function SongTicketModal({
           ? 'Game Ended'
           : 'Live Session';
 
+  const isTraditionalView = viewMode === 'new';
+
   return (
     <div
       role="dialog"
@@ -82,9 +99,17 @@ export function SongTicketModal({
       aria-labelledby="song-ticket-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-6 overflow-y-auto print-modal-backdrop"
     >
-      <div className="print-ticket-root w-full max-w-5xl rounded-3xl border border-white/15 bg-[#10162D] p-4 sm:p-6 shadow-2xl space-y-5 my-auto">
-        {/* Top Modal & Print Header */}
-        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 border-b border-white/10 pb-4 print-ticket-header">
+      <div
+        className={`print-ticket-root ${
+          isTraditionalView ? 'print-traditional-mode' : 'print-existing-mode'
+        } w-full max-w-5xl rounded-3xl border border-white/15 bg-[#10162D] p-4 sm:p-6 shadow-2xl space-y-5 my-auto`}
+      >
+        {/* Top Modal & Print Header (hidden on print when New Ticket Design is selected since the card has its own printed header) */}
+        <div
+          className={`flex flex-col sm:flex-row sm:items-start justify-between gap-4 border-b border-white/10 pb-4 print-ticket-header ${
+            isTraditionalView ? 'no-print' : ''
+          }`}
+        >
           <div className="space-y-2">
             <div className="no-print">
               <GlobalBranding variant="bar" />
@@ -119,7 +144,7 @@ export function SongTicketModal({
           </div>
 
           {/* Actions (hidden during printing) */}
-          <div className="flex items-center gap-2 shrink-0 no-print">
+          <div className="flex flex-wrap items-center gap-2 shrink-0 no-print">
             <button
               type="button"
               onClick={() => window.print()}
@@ -139,8 +164,51 @@ export function SongTicketModal({
           </div>
         </div>
 
+        {/* Ticket View Switcher (Existing Ticket vs New Ticket Design — hidden on print) */}
+        <div className="no-print flex flex-wrap items-center justify-between gap-3">
+          <div
+            role="tablist"
+            aria-label="Song ticket design view"
+            className="inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#090D1C] p-1"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'existing'}
+              onClick={() => setViewMode('existing')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                viewMode === 'existing'
+                  ? 'bg-indigo-500 text-white shadow-sm'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              Existing Ticket
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'new'}
+              onClick={() => setViewMode('new')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                viewMode === 'new'
+                  ? 'bg-amber-400 text-slate-950 shadow-sm'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              New Ticket Design
+            </button>
+          </div>
+          <span className="text-[11px] text-slate-400">
+            Both views display the exact same 15 assigned songs &amp; live status
+          </span>
+        </div>
+
         {/* Live Legend */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#090D1C] px-4 py-2.5 text-xs print-legend">
+        <div
+          className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#090D1C] px-4 py-2.5 text-xs print-legend ${
+            isTraditionalView ? 'no-print' : ''
+          }`}
+        >
           <div className="flex flex-wrap items-center gap-4">
             <span className="inline-flex items-center gap-2 text-emerald-200 font-semibold print-legend-played">
               <span className="inline-flex h-4 w-4 items-center justify-center rounded bg-emerald-400 text-slate-950 ticket-cell-played-badge">
@@ -158,16 +226,31 @@ export function SongTicketModal({
           </span>
         </div>
 
-        {/* Full 3x5 Song Ticket */}
+        {/* Full 3x5 Song Ticket (Either Existing Ticket or New Ticket Design) */}
         <div className="max-h-[68vh] overflow-y-auto pr-1 print-ticket-body">
-          <HousieTicket
-            ticket={ticket}
-            markedSongIds={markedSongIds}
-            playedSongIds={playedSongIds}
-            playedSongNumbers={playedSongNumbers}
-            activeMatchSongId={activeSongId}
-            readOnly
-          />
+          {viewMode === 'existing' ? (
+            <HousieTicket
+              ticket={ticket}
+              markedSongIds={markedSongIds}
+              playedSongIds={playedSongIds}
+              playedSongNumbers={playedSongNumbers}
+              activeMatchSongId={activeSongId}
+              readOnly
+            />
+          ) : (
+            <TraditionalHousieTicket
+              ticket={ticket}
+              markedSongIds={markedSongIds}
+              playedSongIds={playedSongIds}
+              playedSongNumbers={playedSongNumbers}
+              activeMatchSongId={activeSongId}
+              presenterName={presenterName}
+              gameName={gameName}
+              ticketNumber={ticketNumber}
+              playerName={playerName}
+              readOnly
+            />
+          )}
         </div>
       </div>
     </div>

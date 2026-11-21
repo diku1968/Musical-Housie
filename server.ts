@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  LATE_ENTRY_GRACE_MS,
   extractFirstUrlFromInput,
   extractYouTubePlaylistId,
   generateUniqueTickets,
@@ -1016,6 +1017,99 @@ async function startServer() {
           error instanceof Error
             ? error.message
             : 'Server verification failed or unauthorized.',
+      });
+    }
+  });
+
+  // Authoritative Server-Side Room Entry Status & 15-Minute Late-Entry Timer
+  app.get('/api/game/room-entry-status/:roomCode', async (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store, private');
+    try {
+      const authUser = await verifyFirebaseAuth(req);
+      if (!authUser) {
+        res.status(401).json({ error: 'Authentication required.' });
+        return;
+      }
+
+      const roomCode = String(req.params.roomCode || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '');
+      if (!/^[A-Z0-9]{6}$/.test(roomCode)) {
+        res.status(400).json({ error: 'Invalid Ticket Code. Please Check and Try Again.' });
+        return;
+      }
+
+      const fbConfig = loadFirebaseConfig();
+      if (!fbConfig?.projectId) {
+        res.status(500).json({ error: 'Firebase configuration missing on server.' });
+        return;
+      }
+
+      const serverNowMs = Date.now();
+      const roomDoc = await fetchFirestoreDocumentOptional(
+        fbConfig,
+        `rooms/${roomCode}`,
+        authUser.idToken,
+      );
+
+      if (!roomDoc) {
+        res.json({
+          ok: true,
+          exists: false,
+          roomCode,
+          serverNowMs,
+        });
+        return;
+      }
+
+      const playerDoc = await fetchFirestoreDocumentOptional(
+        fbConfig,
+        `rooms/${roomCode}/players/${authUser.uid}`,
+        authUser.idToken,
+      );
+
+      const status = String(roomDoc.status || 'lobby');
+      const expiresRaw = roomDoc.expiresAt;
+      const expiresMs =
+        typeof expiresRaw === 'string' && !Number.isNaN(Date.parse(expiresRaw))
+          ? Date.parse(expiresRaw)
+          : null;
+      const isExpired = expiresMs !== null && expiresMs < serverNowMs;
+
+      const startedAtRaw = roomDoc.startedAt;
+      const startedAtMs =
+        typeof startedAtRaw === 'string' && !Number.isNaN(Date.parse(startedAtRaw))
+          ? Date.parse(startedAtRaw)
+          : null;
+      const deadlineMs = startedAtMs !== null ? startedAtMs + LATE_ENTRY_GRACE_MS : null;
+      const remainingMs = deadlineMs !== null ? Math.max(0, deadlineMs - serverNowMs) : 0;
+      const lateEntryOpen =
+        !isExpired &&
+        (status === 'playing' || status === 'paused') &&
+        deadlineMs !== null &&
+        serverNowMs < deadlineMs;
+
+      res.json({
+        ok: true,
+        exists: true,
+        roomCode,
+        status,
+        isExpired,
+        isHost: roomDoc.hostUid === authUser.uid,
+        isExistingPlayer: Boolean(playerDoc),
+        startedAtMs,
+        deadlineMs,
+        serverNowMs,
+        remainingMs,
+        lateEntryOpen,
+        playerCount: Math.max(0, Number(roomDoc.playerCount || 0)),
+        gameName: String(roomDoc.gameName || ''),
+      });
+    } catch (error) {
+      res.status(500).json({
+        error:
+          error instanceof Error ? error.message : 'Unable to check room entry status right now.',
       });
     }
   });

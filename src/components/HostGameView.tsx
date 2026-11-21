@@ -29,8 +29,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   advanceToNextSong,
   cleanupExpiredOrEndedHostedRooms,
+  dealLatePlayerTickets,
   deleteRoomData,
   endGameRoom,
+  fetchRoomEntryStatus,
   isFirestoreQuotaError,
   resolveWinnerClaim,
   revealCurrentSongToPlayers,
@@ -48,7 +50,9 @@ import {
   verifyClaimOnServer,
 } from '../services/gameService.ts';
 import {
+  LATE_ENTRY_GRACE_MS,
   buildTrackSongNumberMap,
+  formatCountdownMmSs,
   formatTicketNumber,
   verifyClaimAgainstPlayedSongs,
 } from '../shared/gameLogic.ts';
@@ -102,6 +106,11 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
   const processingQueueRef = useRef(false);
   const attemptedAutoResolveRef = useRef<Set<string>>(new Set());
   const prevWinnersCountRef = useRef(0);
+  const dealingLateUidsRef = useRef<Set<string>>(new Set());
+
+  const [serverClockOffsetMs, setServerClockOffsetMs] = useState(0);
+  const [serverStartedAtMs, setServerStartedAtMs] = useState<number | null>(null);
+  const [lateEntryNowMs, setLateEntryNowMs] = useState(() => Date.now());
 
   const [clipDurationSeconds, setClipDurationSeconds] = useState<number | null>(45);
   const [playSignal, setPlaySignal] = useState(0);
@@ -299,6 +308,99 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
     const map = new Map(secret.tracks.map((t) => [t.id, t]));
     return secret.playedSongIds.map((id) => map.get(id)).filter(Boolean);
   }, [secret]);
+
+  // Automatically deal unique 15-song tickets & sync already-called songs for late-joining players
+  useEffect(() => {
+    if (
+      !room ||
+      !secret ||
+      (room.status !== 'playing' && room.status !== 'paused') ||
+      secret.tracks.length < 15
+    ) {
+      return;
+    }
+
+    const undealtPlayers = players.filter(
+      (p) =>
+        p.ticket.length === 0 &&
+        (p.ticketNumber || 0) === 0 &&
+        !dealingLateUidsRef.current.has(p.uid),
+    );
+    if (undealtPlayers.length === 0) return;
+
+    for (const p of undealtPlayers) {
+      dealingLateUidsRef.current.add(p.uid);
+    }
+
+    dealLatePlayerTickets({
+      roomCode,
+      latePlayers: undealtPlayers,
+      existingPlayers: players,
+      tracks: secret.tracks,
+      playedSongIds: livePlayedSongIds,
+    }).catch(() => {
+      for (const p of undealtPlayers) {
+        dealingLateUidsRef.current.delete(p.uid);
+      }
+    });
+  }, [players, room, roomCode, secret, livePlayedSongIds]);
+
+  // Sync authoritative server start time & clock offset for the 15-minute late entry display
+  useEffect(() => {
+    if (!room || room.status === 'lobby') return;
+    let cancelled = false;
+    fetchRoomEntryStatus(roomCode)
+      .then((info) => {
+        if (cancelled || !info.exists) return;
+        setServerClockOffsetMs(info.serverNowMs - Date.now());
+        if (typeof info.startedAtMs === 'number') {
+          setServerStartedAtMs(info.startedAtMs);
+        }
+        setLateEntryNowMs(Date.now());
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [roomCode, room?.status]);
+
+  // Tick the late-entry remaining countdown every second while game is active
+  useEffect(() => {
+    if (!room || (room.status !== 'playing' && room.status !== 'paused')) return;
+    const interval = window.setInterval(() => {
+      setLateEntryNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [room?.status]);
+
+  const gameStartedAtMs = useMemo(() => {
+    const raw = room?.startedAt as { toMillis?: () => number } | undefined;
+    if (raw && typeof raw.toMillis === 'function') {
+      return raw.toMillis();
+    }
+    return serverStartedAtMs;
+  }, [room?.startedAt, serverStartedAtMs]);
+
+  const lateEntryRemainingMs = useMemo(() => {
+    if (!room || room.status === 'lobby' || room.status === 'ended' || gameStartedAtMs === null) {
+      return 0;
+    }
+    const deadlineMs = gameStartedAtMs + LATE_ENTRY_GRACE_MS;
+    return Math.max(0, deadlineMs - (lateEntryNowMs + serverClockOffsetMs));
+  }, [room, gameStartedAtMs, lateEntryNowMs, serverClockOffsetMs]);
+
+  const isLateEntryOpen =
+    Boolean(room && (room.status === 'playing' || room.status === 'paused')) &&
+    lateEntryRemainingMs > 0;
+
+  const formattedGameStartTime = useMemo(() => {
+    if (gameStartedAtMs === null) return '—';
+    return new Date(gameStartedAtMs).toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }, [gameStartedAtMs]);
 
   const viewingTicketPlayer = useMemo(() => {
     if (!viewingTicketPlayerUid) return null;
@@ -667,6 +769,48 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
               <span>Free Firebase Database</span>
             </button>
           )}
+        </div>
+      )}
+
+      {/* Informational 15-Minute Late Player Entry Status Bar (Host View Only) */}
+      {room.status !== 'lobby' && (
+        <div className="rounded-2xl border border-white/10 bg-[#121830] px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="space-y-0.5">
+            <div className="text-[11px] text-slate-400">Game Start Time</div>
+            <div className="font-mono font-bold text-white tabular-nums">
+              {formattedGameStartTime}
+            </div>
+          </div>
+          <div className="space-y-0.5">
+            <div className="text-[11px] text-slate-400">Late Entry Status</div>
+            <div>
+              <span
+                className={`inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-[11px] font-extrabold tracking-wide ${
+                  isLateEntryOpen
+                    ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300'
+                    : 'border-slate-500/40 bg-slate-500/15 text-slate-300'
+                }`}
+              >
+                {isLateEntryOpen ? 'OPEN' : 'CLOSED'}
+              </span>
+            </div>
+          </div>
+          <div className="space-y-0.5">
+            <div className="text-[11px] text-slate-400">Remaining Entry Time</div>
+            <div
+              className={`font-mono font-bold tabular-nums ${
+                isLateEntryOpen ? 'text-amber-300' : 'text-slate-400'
+              }`}
+            >
+              {formatCountdownMmSs(lateEntryRemainingMs)}
+            </div>
+          </div>
+          <div className="space-y-0.5">
+            <div className="text-[11px] text-slate-400">Players Joined</div>
+            <div className="font-mono font-bold text-indigo-300 tabular-nums">
+              {players.length}
+            </div>
+          </div>
         </div>
       )}
 
@@ -1578,6 +1722,7 @@ export function HostGameView({ roomCode, hostUid, onExitRoom }: HostGameViewProp
           playerName={viewingTicketPlayer.name}
           ticketNumber={viewingTicketPlayer.ticketNumber}
           roomCode={room.roomCode}
+          presenterName={room.hostName}
           gameName={room.gameName}
           ticket={viewingTicketPlayer.ticket}
           markedSongIds={viewingTicketPlayer.markedSongIds}

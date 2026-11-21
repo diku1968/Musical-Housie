@@ -78,7 +78,7 @@ service cloud.firestore {
           'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong',
           'revealedSongs', 'playedSongIds', 'playedSongNumbers',
           'enabledPatterns', 'winners', 'playersSummary',
-          'randomMode', 'playerCount', 'createdAt', 'updatedAt', 'expiresAt'
+          'randomMode', 'playerCount', 'createdAt', 'startedAt', 'updatedAt', 'expiresAt'
         ])
         && isValidRoomCode(data.roomCode)
         && data.roomCode == roomId
@@ -108,6 +108,7 @@ service cloud.firestore {
         && data.playerCount is int && data.playerCount >= 0 && data.playerCount <= 10000
         && data.playersSummary.size() <= data.playerCount
         && data.createdAt is timestamp
+        && (!('startedAt' in data) || data.startedAt is timestamp)
         && data.updatedAt is timestamp
         && data.expiresAt is timestamp;
     }
@@ -285,6 +286,7 @@ service cloud.firestore {
         && incoming().playerCount == 0
         && (!('playedSongIds' in incoming()) || incoming().playedSongIds.size() == 0)
         && (!('playedSongNumbers' in incoming()) || incoming().playedSongNumbers.size() == 0)
+        && !('startedAt' in incoming())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && incoming().expiresAt > request.time;
@@ -297,12 +299,13 @@ service cloud.firestore {
         && incoming().hostUid == existing().hostUid
         && incoming().roomCode == existing().roomCode
         && incoming().createdAt == existing().createdAt
+        && (!('startedAt' in existing()) || ('startedAt' in incoming() && incoming().startedAt == existing().startedAt))
         && incoming().expiresAt == existing().expiresAt
         && incoming().updatedAt == request.time
         && (
           (existing().status == 'lobby' && incoming().status == 'lobby' && (!('playedSongIds' in incoming()) || incoming().playedSongIds.size() == 0) && (!('playedSongNumbers' in incoming()) || incoming().playedSongNumbers.size() == 0) && incoming().diff(existing()).affectedKeys().hasOnly(['sourceType', 'playlistName', 'playlistUrl', 'totalSongs', 'enabledPatterns', 'randomMode', 'playedSongIds', 'playedSongNumbers', 'updatedAt'])) ||
           (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['playersSummary', 'playerCount', 'updatedAt'])) ||
-          (existing().status == 'lobby' && existing().totalSongs >= 15 && incoming().status == 'playing' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'playedSongIds', 'playedSongNumbers', 'randomMode', 'enabledPatterns', 'updatedAt'])) ||
+          (existing().status == 'lobby' && existing().totalSongs >= 15 && incoming().status == 'playing' && 'startedAt' in incoming() && incoming().startedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'startedAt', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'playedSongIds', 'playedSongNumbers', 'randomMode', 'enabledPatterns', 'updatedAt'])) ||
           (existing().status in ['playing', 'paused'] && incoming().status in ['playing', 'paused'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongNumber', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'playedSongIds', 'playedSongNumbers', 'randomMode', 'updatedAt'])) ||
           (existing().status in ['playing', 'paused'] && incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['winners', 'updatedAt'])) ||
           (incoming().status == 'ended' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentSongRevealed', 'currentMedia', 'revealedCurrentSong', 'revealedSongs', 'playedSongIds', 'playedSongNumbers', 'updatedAt']))
@@ -364,7 +367,15 @@ service cloud.firestore {
           && incoming().joinedAt == request.time
           && incoming().lastSeenAt == request.time
           && exists(/databases/$(database)/documents/rooms/$(roomId))
-          && get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby'
+          && (
+            get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby' ||
+            (
+              get(/databases/$(database)/documents/rooms/$(roomId)).data.status in ['playing', 'paused']
+              && 'startedAt' in get(/databases/$(database)/documents/rooms/$(roomId)).data
+              && get(/databases/$(database)/documents/rooms/$(roomId)).data.startedAt is timestamp
+              && request.time < get(/databases/$(database)/documents/rooms/$(roomId)).data.startedAt + duration.value(15, 'm')
+            )
+          )
           && get(/databases/$(database)/documents/rooms/$(roomId)).data.expiresAt > request.time
           && incoming().hostUid == get(/databases/$(database)/documents/rooms/$(roomId)).data.hostUid;
 
@@ -382,7 +393,8 @@ service cloud.firestore {
             (request.auth.uid == playerUid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby' && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'isOnline', 'lastSeenAt'])) ||
             (request.auth.uid == playerUid && incoming().diff(existing()).affectedKeys().hasOnly(['isOnline', 'lastSeenAt'])) ||
             (request.auth.uid == playerUid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status in ['playing', 'paused'] && incoming().diff(existing()).affectedKeys().hasOnly(['markedSongIds', 'lastSeenAt'])) ||
-            (existing().hostUid == request.auth.uid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby' && incoming().ticket.size() == 15 && incoming().ticketNumber >= 1 && incoming().diff(existing()).affectedKeys().hasOnly(['ticket', 'ticketNumber', 'markedSongIds', 'lastSeenAt']))
+            (existing().hostUid == request.auth.uid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status == 'lobby' && incoming().ticket.size() == 15 && incoming().ticketNumber >= 1 && incoming().diff(existing()).affectedKeys().hasOnly(['ticket', 'ticketNumber', 'markedSongIds', 'lastSeenAt'])) ||
+            (existing().hostUid == request.auth.uid && get(/databases/$(database)/documents/rooms/$(roomId)).data.status in ['playing', 'paused'] && existing().ticket.size() == 0 && existing().ticketNumber == 0 && incoming().ticket.size() == 15 && incoming().ticketNumber >= 1 && incoming().diff(existing()).affectedKeys().hasOnly(['ticket', 'ticketNumber', 'markedSongIds', 'lastSeenAt']))
           );
 
         allow delete: if isSignedIn()

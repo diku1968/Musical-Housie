@@ -14,7 +14,13 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { buildTrackSongNumberMap, generateRoomCode, shuffleArray } from '../shared/gameLogic.ts';
+import {
+  LATE_ENTRY_GRACE_MS,
+  buildTrackSongNumberMap,
+  generateRoomCode,
+  generateUniqueTicketsForLatePlayers,
+  shuffleArray,
+} from '../shared/gameLogic.ts';
 import {
   ALL_PATTERNS,
   ClaimVerificationResult,
@@ -85,6 +91,46 @@ export interface SavedSession {
   roomCode: string;
   role: 'host' | 'player';
   name: string;
+}
+
+export interface RoomEntryStatusInfo {
+  exists: boolean;
+  roomCode: string;
+  status?: 'lobby' | 'playing' | 'paused' | 'ended';
+  isExpired?: boolean;
+  isHost?: boolean;
+  isExistingPlayer?: boolean;
+  startedAtMs?: number | null;
+  deadlineMs?: number | null;
+  serverNowMs: number;
+  remainingMs?: number;
+  lateEntryOpen?: boolean;
+  playerCount?: number;
+  gameName?: string;
+}
+
+export async function fetchRoomEntryStatus(rawRoomCode: string): Promise<RoomEntryStatusInfo> {
+  const roomCode = rawRoomCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!/^[A-Z0-9]{6}$/.test(roomCode)) {
+    throw new Error('Invalid Ticket Code. Please Check and Try Again.');
+  }
+
+  const user = await requireAuthenticatedUser();
+  const idToken = await user.getIdToken();
+
+  const resp = await fetch(`/api/game/room-entry-status/${encodeURIComponent(roomCode)}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+    },
+    cache: 'no-store',
+  });
+
+  const data = (await resp.json()) as RoomEntryStatusInfo & { ok?: boolean; error?: string };
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error || 'Unable to verify room status right now.');
+  }
+  return data;
 }
 
 const SESSION_KEY = 'musical_housie_session_v1';
@@ -421,7 +467,7 @@ export async function joinGameRoom(
   }
 
   if (!roomSnap.exists()) {
-    throw new Error(`No game room found with code "${roomCode}". Please double-check the code.`);
+    throw new Error('Invalid Ticket Code. Please Check and Try Again.');
   }
 
   const room = roomSnap.data() as RoomData;
@@ -440,10 +486,6 @@ export async function joinGameRoom(
     return { roomCode, role: 'host' };
   }
 
-  if (room.status === 'ended') {
-    throw new Error(`Game ${roomCode} has already ended.`);
-  }
-
   const playerRef = doc(db, 'rooms', roomCode, 'players', user.uid);
   let playerSnap;
   try {
@@ -453,27 +495,47 @@ export async function joinGameRoom(
   }
 
   if (playerSnap.exists()) {
-    // Reconnecting player
-    try {
-      const updates: Record<string, unknown> = {
-        isOnline: true,
-        lastSeenAt: serverTimestamp(),
-      };
-      if (room.status === 'lobby') {
-        updates.name = cleanName;
+    // Existing registered player reconnecting (never restricted by the 15-minute late entry cutoff)
+    if (room.status !== 'ended') {
+      try {
+        const updates: Record<string, unknown> = {
+          isOnline: true,
+          lastSeenAt: serverTimestamp(),
+        };
+        if (room.status === 'lobby') {
+          updates.name = cleanName;
+        }
+        await updateDoc(playerRef, updates);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `rooms/${roomCode}/players/${user.uid}`);
       }
-      await updateDoc(playerRef, updates);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `rooms/${roomCode}/players/${user.uid}`);
     }
     saveLocalSession({ roomCode, role: 'player', name: cleanName });
     return { roomCode, role: 'player' };
   }
 
+  if (room.status === 'ended') {
+    throw new Error('Game Completed – New Entry Not Allowed');
+  }
+
   if (room.status !== 'lobby') {
-    throw new Error(
-      `Game ${roomCode} is already in progress. Players must join in the lobby before tickets are dealt.`,
-    );
+    // Validate 15-minute late entry window strictly against server-side time
+    let lateEntryAllowed = false;
+    try {
+      const entryStatus = await fetchRoomEntryStatus(roomCode);
+      lateEntryAllowed = Boolean(entryStatus.exists && entryStatus.lateEntryOpen);
+    } catch {
+      // Fallback check using room.startedAt; Firestore security rules still strictly enforce server time
+      const startedMs =
+        room.startedAt && typeof (room.startedAt as Timestamp).toMillis === 'function'
+          ? (room.startedAt as Timestamp).toMillis()
+          : null;
+      lateEntryAllowed = startedMs !== null && Date.now() < startedMs + LATE_ENTRY_GRACE_MS;
+    }
+
+    if (!lateEntryAllowed) {
+      throw new Error('Game Started – Late Entry Closed. You can no longer join this game.');
+    }
   }
 
   const duplicateName = (room.playersSummary || []).some(
@@ -499,6 +561,13 @@ export async function joinGameRoom(
       lastSeenAt: serverTimestamp(),
     });
   } catch (err) {
+    const rawMsg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    if (
+      room.status !== 'lobby' &&
+      (rawMsg.includes('permission') || rawMsg.includes('missing or insufficient'))
+    ) {
+      throw new Error('Game Started – Late Entry Closed. You can no longer join this game.');
+    }
     handleFirestoreError(err, OperationType.CREATE, `rooms/${roomCode}/players/${user.uid}`);
   }
 
@@ -732,6 +801,7 @@ export async function startGameAndDealTickets(params: {
 
         batch.update(doc(db, 'rooms', roomCode), {
           status: 'playing',
+          startedAt: serverTimestamp(),
           currentSongNumber: 1,
           currentSongRevealed: false,
           currentMedia: toCurrentMedia(orderedTracks[0]),
@@ -751,6 +821,88 @@ export async function startGameAndDealTickets(params: {
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `rooms/${roomCode}`);
   }
+}
+
+export async function dealLatePlayerTickets(params: {
+  roomCode: string;
+  latePlayers: PlayerData[];
+  existingPlayers: PlayerData[];
+  tracks: TrackItem[];
+  playedSongIds: string[];
+}): Promise<number> {
+  const { roomCode, latePlayers, existingPlayers, tracks, playedSongIds } = params;
+
+  const eligibleLatePlayers = latePlayers.filter(
+    (p) => p.ticket.length === 0 && (p.ticketNumber || 0) === 0,
+  );
+  if (eligibleLatePlayers.length === 0 || tracks.length < 15) {
+    return 0;
+  }
+
+  // Deterministic ordering so late players receive sequential ticket numbers
+  const sortedLatePlayers = [...eligibleLatePlayers].sort((a, b) => {
+    const aMs =
+      a.joinedAt && typeof (a.joinedAt as Timestamp).toMillis === 'function'
+        ? (a.joinedAt as Timestamp).toMillis()
+        : 0;
+    const bMs =
+      b.joinedAt && typeof (b.joinedAt as Timestamp).toMillis === 'function'
+        ? (b.joinedAt as Timestamp).toMillis()
+        : 0;
+    return aMs - bMs || a.uid.localeCompare(b.uid);
+  });
+
+  const existingTickets = existingPlayers
+    .map((p) => p.ticket)
+    .filter((t): t is TicketCell[] => Array.isArray(t) && t.length === 15);
+  const maxTicketNumber = existingPlayers.reduce(
+    (max, p) => Math.max(max, Number(p.ticketNumber || 0)),
+    0,
+  );
+
+  const ticketsByPlayer = generateUniqueTicketsForLatePlayers(
+    tracks,
+    sortedLatePlayers.map((p) => p.uid),
+    existingTickets,
+  );
+
+  const playedIdSet = new Set(playedSongIds);
+  const playedNumberSet = new Set(derivePlayedSongNumbers(playedSongIds, tracks));
+
+  const BATCH_LIMIT = 400;
+  try {
+    for (let i = 0; i < sortedLatePlayers.length; i += BATCH_LIMIT) {
+      const chunk = sortedLatePlayers.slice(i, i + BATCH_LIMIT);
+      const batch = writeBatch(db);
+
+      chunk.forEach((player, idx) => {
+        const assignedTicket = ticketsByPlayer[player.uid];
+        if (!assignedTicket || assignedTicket.length !== 15) return;
+        const ticketNumber = maxTicketNumber + i + idx + 1;
+        const preMarkedSongIds = assignedTicket
+          .filter(
+            (cell) =>
+              playedIdSet.has(cell.id) ||
+              (typeof cell.songNumber === 'number' && playedNumberSet.has(cell.songNumber)),
+          )
+          .map((cell) => cell.id)
+          .slice(0, 15);
+
+        batch.update(doc(db, 'rooms', roomCode, 'players', player.uid), {
+          ticket: assignedTicket,
+          ticketNumber,
+          markedSongIds: preMarkedSongIds,
+          lastSeenAt: serverTimestamp(),
+        });
+      });
+
+      await batch.commit();
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `rooms/${roomCode}/players`);
+  }
+
+  return sortedLatePlayers.length;
 }
 
 export async function setRoomPlaybackStatus(

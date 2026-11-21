@@ -42,7 +42,8 @@ import {
 import { GlobalBranding } from './GlobalBranding.tsx';
 import { HousieTicket } from './HousieTicket.tsx';
 import { MusicVisualizer } from './MusicVisualizer.tsx';
-import { SongTicketModal } from './SongTicketModal.tsx';
+import { SongTicketModal, type TicketViewMode } from './SongTicketModal.tsx';
+import { TraditionalHousieTicket } from './TraditionalHousieTicket.tsx';
 import { WinningPatternsBoard } from './WinningPatternsBoard.tsx';
 import { YouTubePlayer } from './YouTubePlayer.tsx';
 
@@ -106,6 +107,7 @@ export function PlayerGameView({
   const [phonePlayerActive, setPhonePlayerActive] = useState(false);
   const [ticketModalOpen, setTicketModalOpen] = useState(false);
   const [autoPrintTicket, setAutoPrintTicket] = useState(false);
+  const [ticketViewMode, setTicketViewMode] = useState<TicketViewMode>('existing');
   const [matchAlert, setMatchAlert] = useState<{
     songId: string;
     songNumber?: number;
@@ -684,15 +686,70 @@ export function PlayerGameView({
               </div>
             </div>
 
-            <HousieTicket
-              ticket={player.ticket}
-              markedSongIds={effectiveMarkedSongIds}
-              playedSongIds={livePlayedSongIds}
-              playedSongNumbers={livePlayedSongNumbers}
-              activeMatchSongId={activeMatchCell ? activeMatchCell.id : ''}
-              onToggleSong={handleToggleSong}
-              disabled={room.status === 'ended'}
-            />
+            {/* Ticket Design Switcher Tabs: Existing Ticket (default) | New Ticket Design */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div
+                role="tablist"
+                aria-label="Ticket design selector"
+                className="inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#090D1C] p-1"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={ticketViewMode === 'existing'}
+                  onClick={() => setTicketViewMode('existing')}
+                  className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                    ticketViewMode === 'existing'
+                      ? 'bg-indigo-500 text-white shadow-sm'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Existing Ticket
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={ticketViewMode === 'new'}
+                  onClick={() => setTicketViewMode('new')}
+                  className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                    ticketViewMode === 'new'
+                      ? 'bg-amber-400 text-slate-950 shadow-sm'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  New Ticket Design
+                </button>
+              </div>
+              <span className="text-[11px] text-slate-400">
+                Switch anytime · same 15 songs &amp; synced marks
+              </span>
+            </div>
+
+            {ticketViewMode === 'existing' ? (
+              <HousieTicket
+                ticket={player.ticket}
+                markedSongIds={effectiveMarkedSongIds}
+                playedSongIds={livePlayedSongIds}
+                playedSongNumbers={livePlayedSongNumbers}
+                activeMatchSongId={activeMatchCell ? activeMatchCell.id : ''}
+                onToggleSong={handleToggleSong}
+                disabled={room.status === 'ended'}
+              />
+            ) : (
+              <TraditionalHousieTicket
+                ticket={player.ticket}
+                markedSongIds={effectiveMarkedSongIds}
+                playedSongIds={livePlayedSongIds}
+                playedSongNumbers={livePlayedSongNumbers}
+                activeMatchSongId={activeMatchCell ? activeMatchCell.id : ''}
+                onToggleSong={handleToggleSong}
+                disabled={room.status === 'ended'}
+                presenterName={room.hostName}
+                gameName={room.gameName}
+                ticketNumber={player.ticketNumber}
+                playerName={player.name}
+              />
+            )}
           </div>
 
           {/* Player's Submitted Claims */}
@@ -884,6 +941,7 @@ export function PlayerGameView({
         playerName={player.name}
         ticketNumber={player.ticketNumber}
         roomCode={room.roomCode}
+        presenterName={room.hostName}
         gameName={room.gameName}
         ticket={player.ticket}
         markedSongIds={effectiveMarkedSongIds}
@@ -891,6 +949,7 @@ export function PlayerGameView({
         playedSongNumbers={livePlayedSongNumbers}
         activeSongId={activeMatchCell ? activeMatchCell.id : ''}
         roomStatus={room.status}
+        initialViewMode={ticketViewMode}
         autoPrintOnOpen={autoPrintTicket}
         onAutoPrintHandled={() => setAutoPrintTicket(false)}
       />

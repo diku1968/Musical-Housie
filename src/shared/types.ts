@@ -90,6 +90,7 @@ export interface RoomData {
   randomMode: boolean;
   playerCount: number;
   createdAt?: unknown;
+  startedAt?: unknown;
   updatedAt?: unknown;
   expiresAt?: unknown;
 }
