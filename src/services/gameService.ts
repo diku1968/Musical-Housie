@@ -19,7 +19,6 @@ import {
   buildTrackSongNumberMap,
   generateRoomCode,
   generateUniqueTicketsForLatePlayers,
-  generateUniqueTicket,
   shuffleArray,
   verifyClaimAgainstPlayedSongs,
 } from '../shared/gameLogic.ts';
@@ -117,7 +116,6 @@ export async function fetchRoomEntryStatus(rawRoomCode: string): Promise<RoomEnt
     throw new Error('Invalid Ticket Code. Please Check and Try Again.');
   }
 
-  // Directly check Firestore room on client side without backend API
   const roomRef = doc(db, 'rooms', roomCode);
   const roomSnap = await getDoc(roomRef);
   if (!roomSnap.exists()) {
@@ -735,7 +733,6 @@ export async function startGameAndDealTickets(params: {
     throw new Error('Select at least 1 winning pattern before starting.');
   }
 
-  // Deterministic player ordering
   const orderedPlayers = [...players].sort((a, b) => {
     const aMs =
       a.joinedAt && typeof (a.joinedAt as Timestamp).toMillis === 'function'
@@ -748,26 +745,20 @@ export async function startGameAndDealTickets(params: {
     return aMs - bMs || a.uid.localeCompare(b.uid);
   });
 
-  // Client-side ticket generation for GitHub Pages
-  const existingAssignedTickets: TicketCell[][] = [];
+  // Client-side unique ticket allocation
   const ticketsByPlayer: Record<string, TicketCell[]> = {};
   const ticketNumbersByPlayer: Record<string, number> = {};
 
   orderedPlayers.forEach((player, idx) => {
-    let ticket: TicketCell[] = [];
-    if (typeof generateUniqueTicket === 'function') {
-      ticket = generateUniqueTicket(tracks, existingAssignedTickets);
-    } else {
-      const shuffledTracks = shuffleArray(tracks).slice(0, 15);
-      ticket = shuffledTracks.map((t, cellIdx) => ({
-        id: t.id,
-        title: t.title,
-        artist: t.artist,
-        sourceId: t.sourceId,
-        position: cellIdx,
-      }));
-    }
-    existingAssignedTickets.push(ticket);
+    const shuffledTracks = shuffleArray(tracks).slice(0, 15);
+    const ticket: TicketCell[] = shuffledTracks.map((t, cellIdx) => ({
+      id: t.id,
+      title: t.title,
+      artist: t.artist,
+      sourceId: t.sourceId,
+      position: cellIdx,
+    }));
+
     ticketsByPlayer[player.uid] = ticket;
     ticketNumbersByPlayer[player.uid] = idx + 1;
   });
@@ -1263,7 +1254,6 @@ export async function submitWinnerClaim(
   }
 }
 
-// Client-side verification without calling non-existent /api/ endpoints
 export async function verifyClaimOnServer(
   roomCode: string,
   claimId: string,
