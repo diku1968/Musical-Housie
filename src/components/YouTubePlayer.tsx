@@ -78,25 +78,42 @@ export function loadYouTubeIframeApi(): Promise<void> {
   return ytApiPromise;
 }
 
-async function fetchYouTubeVideoTitle(videoId: string): Promise<{ title: string; author: string }> {
+// Client-side validator: Checks both Noembed and YouTube oEmbed to detect playback restrictions
+async function checkAndFetchVideoMeta(videoId: string): Promise<{
+  title: string;
+  author: string;
+  isPlayable: boolean;
+  reason?: string;
+}> {
   try {
     const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`);
     if (res.ok) {
       const data = await res.json();
-      if (data && data.title) {
+      if (data.error) {
+        return {
+          title: `Video ID ${videoId}`,
+          author: 'YouTube',
+          isPlayable: false,
+          reason: 'Embedding restricted by copyright owner (Error 150/101)',
+        };
+      }
+      if (data.title) {
         return {
           title: data.title,
           author: data.author_name || 'YouTube Music',
+          isPlayable: true,
         };
       }
     }
   } catch {
-    // Fallback if network or service unavailable
+    // If network fails
   }
 
   return {
-    title: `Song #${videoId.slice(0, 6)}`,
+    title: `Video ID ${videoId}`,
     author: 'YouTube',
+    isPlayable: false,
+    reason: 'Could not verify playback permissions',
   };
 }
 
@@ -196,8 +213,17 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
 
     for (let i = 0; i < uniqueIds.length; i++) {
       const vid = uniqueIds[i];
-      try {
-        const meta = await fetchYouTubeVideoTitle(vid);
+      const meta = await checkAndFetchVideoMeta(vid);
+
+      if (!meta.isPlayable) {
+        problemTracks.push({
+          position: i + 1,
+          sourceId: vid,
+          title: meta.title,
+          artist: meta.author,
+          reason: meta.reason || 'Embedding disabled by copyright owner',
+        });
+      } else {
         tracks.push({
           id: `yt_${vid}`,
           title: meta.title.slice(0, 120),
@@ -205,14 +231,6 @@ export async function resolvePlaylistViaYouTubeIFrame(playlistId: string): Promi
           sourceType: 'youtube',
           sourceId: vid,
           thumbnailUrl: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-        });
-      } catch {
-        problemTracks.push({
-          position: i + 1,
-          sourceId: vid,
-          title: `Video ID ${vid}`,
-          artist: 'YouTube',
-          reason: 'Could not fetch metadata',
         });
       }
     }
